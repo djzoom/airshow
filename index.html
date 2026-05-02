@@ -14,8 +14,18 @@ canvas{display:block}
 #planner{background:#0e1623;border-right:1px solid #1f2a3c;overflow-y:auto;display:flex;flex-direction:column;font-size:12px}
 #planner h1{font-size:14px;letter-spacing:3px;color:#fff;padding:12px 16px 2px}
 #planner h2{font-size:9px;letter-spacing:3px;color:#7a90b0;padding:0 16px 12px;font-weight:normal;border-bottom:1px solid #1f2a3c}
-#planner section{padding:12px 16px;border-bottom:1px solid #1f2a3c}
-#planner h3{font-size:11px;letter-spacing:2px;color:#9bb4d4;margin-bottom:10px;font-weight:bold}
+#planner section,#planner details{padding:10px 14px;border-bottom:1px solid #1f2a3c}
+#planner details{padding:0}
+#planner details > *:not(summary){padding-left:14px;padding-right:14px}
+#planner summary{padding:10px 14px;cursor:pointer;list-style:none;font-size:11px;letter-spacing:2px;color:#9bb4d4;font-weight:bold;user-select:none;display:flex;align-items:center;gap:6px}
+#planner summary::-webkit-details-marker{display:none}
+#planner summary::before{content:'▸';font-size:9px;transition:transform .15s;color:#5a6a82}
+#planner details[open] > summary::before{transform:rotate(90deg)}
+#planner summary:hover{color:#cde}
+#planner details[open] > summary{color:#cde}
+#planner details > div:last-child,#planner details > pre:last-child{padding-bottom:12px}
+#topbar{padding:10px 14px;border-bottom:1px solid #1f2a3c;background:rgba(20,40,80,.18)}
+.hint{font-size:10px;color:#7a90b0;margin:4px 0 6px;letter-spacing:1px}
 
 .field{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px;font-size:11px;line-height:1.5}
 .field label{color:#aab8c8;letter-spacing:1px}
@@ -70,6 +80,9 @@ canvas{display:block}
 #transport button:hover{background:#1c3050;border-color:#4a90d8;color:#fff}
 #transport button.primary{background:#0a4;border-color:#0f8;color:#fff}
 #transport button.primary:hover{background:#0c6}
+#transport button.toggle{background:#10242e;border-color:#356}
+#transport button.toggle.on{background:#1c5a4a;border-color:#0c8;color:#cfe}
+#transport button.toggle:not(.on){opacity:0.55}
 #transport .time{color:#ffd24a;font-weight:bold;font-size:14px;letter-spacing:2px;margin-left:auto}
 #transport .speedwrap{display:flex;align-items:center;gap:4px;font-size:10px;color:#9bb4d4}
 #transport input[type=range]{width:100px}
@@ -116,10 +129,22 @@ canvas{display:block}
 <div id="app">
   <aside id="planner" class="scroll">
     <h1>飞行表演规划系统</h1>
-    <h2>AIR SHOW PLANNER · v1.0</h2>
+    <h2>AIR SHOW PLANNER · v1.1</h2>
 
-    <section>
-      <h3>1 · 总体设置 / SETUP</h3>
+    <!-- Always-visible transport row at the very top — the most-used controls. -->
+    <section id="topbar">
+      <div id="transport">
+        <button id="play" class="primary" title="开始/继续 (Space)">▶ 起飞</button>
+        <button id="pause" title="暂停">⏸</button>
+        <button id="restart" title="重置">⟲</button>
+        <span class="speedwrap">×<span id="spdLabel">1.0</span><input id="simSpeed" type="range" min="0.25" max="4" step="0.25" value="1"></span>
+        <button id="smokeToggle" class="toggle on" title="切换全队烟雾">SMOKE</button>
+        <span class="time" id="time">00:00 / 00:00</span>
+      </div>
+    </section>
+
+    <details open>
+      <summary>1 · 总体设置 / SETUP</summary>
       <div class="field"><label>表演队 / Preset</label>
         <select id="teamPreset">
           <option value="BAYI">八一 · J-10 (6)</option>
@@ -136,35 +161,35 @@ canvas{display:block}
           <option value="LINE">LINE · 横排</option>
           <option value="DIAMOND">DIAMOND · 菱形</option>
         </select></div>
-      <div class="field"><label>表演高度 / Alt</label>
-        <div class="row"><input id="altMin" type="number" value="150"><span class="unit">~</span><input id="altMax" type="number" value="500"><span class="unit">m</span></div></div>
-      <div class="field"><label>巡航速度 / Speed</label>
-        <div class="row"><input id="spdMin" type="number" value="80"><span class="unit">~</span><input id="spdMax" type="number" value="140"><span class="unit">m/s</span></div></div>
-      <div class="field"><label>起飞时间 / T0</label>
-        <input id="takeoffTime" type="number" value="0"><span class="unit">s</span></div>
-    </section>
+      <div class="field"><label>高度 / Alt (m)</label>
+        <div class="row"><input id="altMin" type="number" value="150"><span class="unit">~</span><input id="altMax" type="number" value="500"></div></div>
+      <div class="field"><label>速度 / Spd (m/s)</label>
+        <div class="row"><input id="spdMin" type="number" value="80"><span class="unit">~</span><input id="spdMax" type="number" value="140"></div></div>
+      <div class="field"><label>起飞时间 / T0 (s)</label>
+        <input id="takeoffTime" type="number" value="0"></div>
+    </details>
 
-    <section>
-      <h3>2 · 动作模块序列 / MODULES</h3>
+    <details open>
+      <summary>2 · 动作模块序列 / MODULES</summary>
       <div id="moduleList" class="scroll"></div>
-      <div style="font-size:10px;color:#7a90b0;margin-bottom:6px;letter-spacing:1px">添加模块 · ADD</div>
+      <div class="hint">添加模块 · ADD</div>
       <div class="add-row">
         <button data-add="CRUISE">CRUISE 巡航</button>
         <button data-add="FORMATION_CHANGE">编队变换</button>
         <button data-add="LOOP">LOOP 筋斗</button>
-        <button data-add="BARREL_ROLL">BARREL ROLL 横滚</button>
-        <button data-add="BOMB_BURST">BOMB BURST 爆破</button>
-        <button data-add="MIRROR_PASS">MIRROR PASS 对穿</button>
-        <button data-add="LOW_PASS">LOW PASS 低空</button>
-        <button data-add="HIGH_PASS">HIGH PASS 高空</button>
+        <button data-add="BARREL_ROLL">BARREL 横滚</button>
+        <button data-add="BOMB_BURST">BOMB 爆破</button>
+        <button data-add="MIRROR_PASS">MIRROR 对穿</button>
+        <button data-add="LOW_PASS">LOW PASS</button>
+        <button data-add="HIGH_PASS">HIGH PASS</button>
       </div>
-    </section>
+    </details>
 
-    <section>
-      <h3>3 · 各机任务 / AIRCRAFT TASKS</h3>
+    <details>
+      <summary>3 · 各机任务 / AIRCRAFT TASKS</summary>
       <div id="aircraftBar"></div>
       <div id="taskList" class="scroll"></div>
-      <div class="add-row" id="taskAddRow" style="grid-template-columns:1fr 60px 50px auto;gap:4px;align-items:stretch">
+      <div class="add-row" id="taskAddRow" style="grid-template-columns:1fr 60px 50px auto;gap:4px">
         <select id="taskType">
           <option value="SOLO_LOOP">SOLO LOOP 筋斗</option>
           <option value="SOLO_ROLL">SOLO ROLL 横滚</option>
@@ -177,26 +202,13 @@ canvas{display:block}
         <input id="taskDur" type="number" placeholder="dur" title="时长 (s)">
         <button id="taskAdd">+ 添加</button>
       </div>
-      <div style="font-size:9.5px;color:#7a90b0;margin-top:6px;letter-spacing:1px">
-        长机 (#1) 锁定为编队基准；其余飞机可在动作模块内插入独立任务。
-      </div>
-    </section>
+      <div class="hint">长机 (#1) 锁定为编队基准；其余飞机可在动作模块内插入独立任务。</div>
+    </details>
 
-    <section>
-      <h3>4 · 模拟控制 / RUN</h3>
-      <div id="transport">
-        <button id="play" class="primary">▶ 起飞</button>
-        <button id="pause">⏸</button>
-        <button id="restart">⟲</button>
-        <span class="speedwrap">×<span id="spdLabel">1.0</span> <input id="simSpeed" type="range" min="0.25" max="4" step="0.25" value="1"></span>
-        <span class="time" id="time">00:00 / 00:00</span>
-      </div>
-    </section>
-
-    <section>
-      <h3>5 · 完整方案输出 / GENERATED PLAN</h3>
+    <details>
+      <summary>4 · 完整方案输出 / GENERATED PLAN</summary>
       <pre id="planText" class="scroll"></pre>
-    </section>
+    </details>
   </aside>
 
   <main id="viewport">
@@ -373,7 +385,8 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
+renderer.toneMappingExposure = 1.18;
+renderer.physicallyCorrectLights = true;
 
 const scene = new THREE.Scene();
 const skyTop = new THREE.Color(0x4a90d8);
@@ -391,12 +404,18 @@ new ResizeObserver(resize).observe(canvas.parentElement);
 const sun = new THREE.DirectionalLight(0xfff2cc, 1.15);
 sun.position.set(500, 800, 300);
 sun.castShadow = true;
-sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.mapSize.set(2048, 2048);
 const sc = sun.shadow.camera;
-sc.left = -400; sc.right = 400; sc.top = 400; sc.bottom = -400; sc.near = 100; sc.far = 2200;
-sun.shadow.bias = -0.0004;
+sc.left = -400; sc.right = 400; sc.top = 400; sc.bottom = -400; sc.near = 100; sc.far = 2500;
+sun.shadow.bias = -0.0003;
+sun.shadow.normalBias = 0.04;
+sun.shadow.radius = 4;
 scene.add(sun);
-scene.add(new THREE.HemisphereLight(0xb6daff, 0x4a8a3a, 0.55));
+scene.add(new THREE.HemisphereLight(0xb6daff, 0x4a8a3a, 0.65));
+// Cool fill from the opposite side keeps undersides legible during loops.
+const fill = new THREE.DirectionalLight(0x9fbfff, 0.25);
+fill.position.set(-200, 80, -200);
+scene.add(fill);
 
 // Sky gradient sphere
 {
@@ -518,7 +537,8 @@ const TEAM_PRESETS = {
     label: '八一表演队 · J-10',
     short: '八一 / Bayi',
     model: 'j10.glb',
-    modelOrient: { x: 0, y: 0, z: 0 },
+    // Vertex-distribution analysis: nose along +X, swing to -Z with R_y(+π/2).
+    modelOrient: { x: 0, y: Math.PI/2, z: 0 },
     modelScale: 8,
     teamSize: 6,
     initialFormation: 'TRAIL',
@@ -531,7 +551,8 @@ const TEAM_PRESETS = {
     label: '雷鸟 · F-16',
     short: 'Thunderbirds',
     model: 'f16.glb',
-    modelOrient: { x: 0, y: 0, z: 0 },
+    // Nose along +X (same as J-10), swing to -Z with R_y(+π/2).
+    modelOrient: { x: 0, y: Math.PI/2, z: 0 },
     modelScale: 8,
     teamSize: 6,
     initialFormation: 'TRAIL',
@@ -544,7 +565,8 @@ const TEAM_PRESETS = {
     label: '三色箭 · MB-339',
     short: 'Frecce Tricolori',
     model: 'mb339.glb',
-    modelOrient: { x: 0, y: 0, z: 0 },
+    // Nose along -X for this asset → swing to -Z with R_y(-π/2).
+    modelOrient: { x: 0, y: -Math.PI/2, z: 0 },
     modelScale: 7,
     teamSize: 10,
     initialFormation: 'V',
@@ -698,22 +720,73 @@ function makeFallbackPlane(color) {
 for (const ps of Object.values(TEAM_PRESETS)) loadModelOnce(ps.model, ps.modelOrient);
 
 // ---------- Smoke trails (per plane) ----------
-const smokeGeo = new THREE.PlaneGeometry(2.4, 2.4);
+// Sprite-based volumetric-feel puffs. The texture is a procedurally
+// generated soft radial gradient with 1/f noise, which keeps every puff
+// looking like an aerodynamic smoke clump without shipping image assets.
+const smokeTex = (() => {
+  const N = 128, c = document.createElement('canvas');
+  c.width = c.height = N;
+  const g = c.getContext('2d');
+  // Soft radial alpha
+  const grad = g.createRadialGradient(N/2, N/2, 1, N/2, N/2, N/2);
+  grad.addColorStop(0.0, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.4, 'rgba(255,255,255,0.55)');
+  grad.addColorStop(0.8, 'rgba(255,255,255,0.10)');
+  grad.addColorStop(1.0, 'rgba(255,255,255,0)');
+  g.fillStyle = grad; g.fillRect(0, 0, N, N);
+  // Multi-octave noise modulating alpha for a wispy edge
+  const img = g.getImageData(0, 0, N, N);
+  const d = img.data;
+  for (let y=0;y<N;y++) for (let x=0;x<N;x++) {
+    const i = (y*N + x) * 4;
+    let n = 0, amp = 1, f = 1/22, total = 0;
+    for (let o=0;o<3;o++) {
+      n += amp * (Math.sin(x*f + Math.cos(y*f*1.3))*Math.cos(y*f - Math.sin(x*f*0.7)));
+      total += amp; amp *= 0.55; f *= 2;
+    }
+    n = (n/total + 1) * 0.5;        // 0..1
+    n = 0.55 + 0.45 * n;             // bias toward bright
+    d[i+3] = Math.max(0, Math.min(255, d[i+3] * n));
+  }
+  g.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+})();
+
+let smokeGlobalOn = true;
+
 function spawnSmoke(p, dt) {
-  if (!p.smokeOn) return;
-  // Don't pile smoke at the spawn point while the sim is paused.
-  if (!sim.playing) return;
+  if (!smokeGlobalOn || !p.smokeOn || !sim.playing) return;
   p.smokeTimer += dt;
-  if (p.smokeTimer < 0.05) return;
+  if (p.smokeTimer < 0.045) return;
   p.smokeTimer = 0;
-  const mat = new THREE.MeshBasicMaterial({color: p.smokeColor, transparent:true, opacity:0.9, depthWrite:false});
-  const s = new THREE.Mesh(smokeGeo, mat);
-  const back = new THREE.Vector3(0, -0.3, 4).applyQuaternion(p.quaternion);
+  // Each puff gets its own material so we can vary rotation & color per spawn.
+  const mat = new THREE.SpriteMaterial({
+    map: smokeTex,
+    color: p.smokeColor,
+    transparent: true,
+    opacity: 0.78,
+    depthWrite: false,
+    rotation: Math.random() * Math.PI * 2,
+  });
+  const s = new THREE.Sprite(mat);
+  const back = new THREE.Vector3((Math.random()-0.5)*0.4, -0.3, 4 + Math.random()*0.4)
+    .applyQuaternion(p.quaternion);
   s.position.copy(p.position).add(back);
-  s.userData = {life:2.4, scale:1};
+  const initScale = 1.6 + Math.random() * 0.8;
+  s.scale.setScalar(initScale);
+  s.userData = {
+    life: 3.4,
+    maxLife: 3.4,
+    scaleVel: 5.5 + Math.random() * 4.0,
+    rotVel: (Math.random()-0.5) * 0.6,
+    drift: new THREE.Vector3((Math.random()-0.5)*0.6, 0.15+Math.random()*0.25, (Math.random()-0.5)*0.6),
+  };
   scene.add(s);
   p.smoke.push(s);
-  if (p.smoke.length > 110) {
+  if (p.smoke.length > 130) {
     const old = p.smoke.shift();
     scene.remove(old);
     old.material.dispose();
@@ -722,15 +795,17 @@ function spawnSmoke(p, dt) {
 function updateSmoke(p, dt) {
   for (let i=p.smoke.length-1;i>=0;i--) {
     const s = p.smoke[i];
-    s.userData.life -= dt;
-    s.userData.scale += dt*7;
-    s.scale.setScalar(s.userData.scale);
-    s.material.opacity = Math.max(0, s.userData.life/2.4)*0.85;
-    s.lookAt(camera.position);
-    if (s.userData.life <= 0) {
+    const u = s.userData;
+    u.life -= dt;
+    s.scale.setScalar(s.scale.x + u.scaleVel * dt);
+    s.material.rotation += u.rotVel * dt;
+    s.position.addScaledVector(u.drift, dt);
+    const k = u.life / u.maxLife;
+    s.material.opacity = Math.max(0, k * k) * 0.78;
+    if (u.life <= 0) {
       scene.remove(s);
       s.material.dispose();
-      p.smoke.splice(i,1);
+      p.smoke.splice(i, 1);
     }
   }
 }
@@ -1477,6 +1552,24 @@ bindSetup();
 document.getElementById('play').addEventListener('click', () => { sim.playing = true; });
 document.getElementById('pause').addEventListener('click', () => { sim.playing = false; });
 document.getElementById('restart').addEventListener('click', () => { rebuildAndReset(); sim.playing = true; });
+document.getElementById('smokeToggle').addEventListener('click', e => {
+  smokeGlobalOn = !smokeGlobalOn;
+  e.currentTarget.classList.toggle('on', smokeGlobalOn);
+  // When turning off, sweep the existing puffs so the toggle feels immediate.
+  if (!smokeGlobalOn) {
+    for (const p of planes) {
+      for (const s of p.smoke) { scene.remove(s); s.material.dispose(); }
+      p.smoke.length = 0;
+    }
+  }
+});
+// Spacebar = play/pause toggle, common in flight sims.
+addEventListener('keydown', e => {
+  if (e.code === 'Space' && !/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) {
+    e.preventDefault();
+    sim.playing = !sim.playing;
+  }
+});
 document.getElementById('simSpeed').addEventListener('input', e => {
   sim.speed = +e.target.value;
   document.getElementById('spdLabel').textContent = sim.speed.toFixed(2);
