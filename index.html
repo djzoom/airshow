@@ -504,52 +504,101 @@ function box(w,h,d,col){return new THREE.Mesh(new THREE.BoxGeometry(w,h,d), new 
 }
 
 // ---------- Team presets ----------
-// Three world-famous display team configurations.
-// `model` path is currently a fallback to b738.glb until real airframe models
-// are provided; the presets are otherwise complete (sizes, colors, smoke).
+// Three world-famous display team configurations. Each preset names a GLB
+// to load; if it 404s or fails to parse, buildFleet falls back to the
+// procedural plane silhouette so the simulation still runs.
+//
+// modelOrient: Euler angles (XYZ) applied to the loaded scene to reorient
+//   the airframe so its nose points -Z (Three.js convention). Sketchfab
+//   models commonly come with nose along +X; rotateY(π/2) swings +X to -Z.
+// modelScale: target longest-side length in world units (≈ 8 reads well
+//   against the runway and camera distances tuned earlier).
 const TEAM_PRESETS = {
   BAYI: {
     label: '八一表演队 · J-10',
     short: '八一 / Bayi',
-    model: 'b738.glb',
-    modelScale: 7.5,
+    model: 'j10.glb',
+    modelOrient: { x: 0, y: 0, z: 0 },
+    modelScale: 8,
     teamSize: 6,
     initialFormation: 'TRAIL',
     bodyColors: [0xe73327, 0xffffff, 0x1f4cb8, 0x1f4cb8, 0xe73327, 0xffffff],
     smokeColors: [0xe73327, 0xffffff, 0x1f4cb8],
-    // Per-plane smoke index into smokeColors. Length = teamSize.
     smokeAssign: [0, 1, 2, 0, 1, 2],
+    credits: '"Chengdu J10 Vigorous Dragon" by andertan (CC-BY)',
   },
   THUNDERBIRDS: {
     label: '雷鸟 · F-16',
     short: 'Thunderbirds',
-    model: 'b738.glb',
-    modelScale: 7.5,
+    model: 'f16.glb',
+    modelOrient: { x: 0, y: 0, z: 0 },
+    modelScale: 8,
     teamSize: 6,
     initialFormation: 'TRAIL',
-    // White airframe with red & blue accents distributed across slots
     bodyColors: [0xffffff, 0xe53b3b, 0x1f3fa8, 0xffffff, 0xe53b3b, 0x1f3fa8],
     smokeColors: [0xffffff],
     smokeAssign: [0, 0, 0, 0, 0, 0],
+    credits: '"Fighter Jet Collection - Low Poly" by bohmerang (CC-BY)',
   },
   FRECCE: {
     label: '三色箭 · MB-339',
     short: 'Frecce Tricolori',
-    model: 'b738.glb',
-    modelScale: 6.5,
+    model: 'mb339.glb',
+    modelOrient: { x: 0, y: 0, z: 0 },
+    modelScale: 7,
     teamSize: 10,
     initialFormation: 'V',
     bodyColors: Array(10).fill(0x274a8c),
-    // Italian flag: green / white / red
     smokeColors: [0x008c45, 0xffffff, 0xcd212a],
-    // Front 3 green, middle 4 white, rear 3 red — matches Frecce's actual arrangement
     smokeAssign: [0, 0, 0, 1, 1, 1, 1, 2, 2, 2],
+    credits: '"Aermacchi MB 339" by helijah (CC-BY)',
   },
 };
 
 // ---------- Plane fleet ----------
-let planeTemplate = null;
+// Cache loaded & normalized model scenes by path. Each entry is either:
+//   undefined     — never requested
+//   Promise<obj>  — currently loading
+//   THREE.Group   — ready to clone (oriented, centered, unscaled)
+//   false         — load failed permanently (use fallback)
+const modelCache = {};
 const planes = [];
+
+function loadModelOnce(path, orient) {
+  if (modelCache[path] !== undefined && !(modelCache[path] instanceof Promise)) {
+    return Promise.resolve(modelCache[path]);
+  }
+  if (modelCache[path] instanceof Promise) return modelCache[path];
+  const p = new Promise((resolve) => {
+    new GLTFLoader().load(path, gltf => {
+      const root = gltf.scene;
+      // Wrap so we can apply orientation/centering without clobbering the
+      // root's own Y-up conversion transform that the loader sets.
+      const wrap = new THREE.Group();
+      wrap.add(root);
+      if (orient) wrap.rotation.set(orient.x||0, orient.y||0, orient.z||0);
+      wrap.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(wrap);
+      const sz = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      // Center on origin via the *root* offset so the wrap's rotation pivot
+      // remains at the wrap's origin.
+      root.position.sub(wrap.worldToLocal(center.clone()));
+      wrap.updateMatrixWorld(true);
+      const box2 = new THREE.Box3().setFromObject(wrap);
+      const sz2 = box2.getSize(new THREE.Vector3());
+      wrap.userData.bbMax = Math.max(sz2.x, sz2.y, sz2.z) || 1;
+      modelCache[path] = wrap;
+      resolve(wrap);
+    }, undefined, err => {
+      console.warn('Model load failed:', path, err && (err.message || err));
+      modelCache[path] = false;
+      resolve(false);
+    });
+  });
+  modelCache[path] = p;
+  return p;
+}
 
 class Plane {
   constructor(idx, color, smokeColor) {
@@ -567,12 +616,16 @@ class Plane {
     this.group = new THREE.Group();
     scene.add(this.group);
   }
-  setMesh(template) {
+  setMesh(template, modelScale) {
+    // template is a normalized scene: oriented (nose -Z), centered, unscaled.
+    // Stored in template.userData.bbMax = pre-orient longest axis length.
     const m = template.clone(true);
+    const targetLen = modelScale || 8;
+    const bbMax = template.userData.bbMax || 1;
+    m.scale.setScalar(targetLen / bbMax);
     m.traverse(c => {
       if (c.isMesh) {
         c.castShadow = true;
-        // Tint material
         if (c.material) {
           const mat = c.material.clone();
           if (mat.color) {
@@ -599,16 +652,31 @@ function buildFleet(n, preset) {
     p.smoke.forEach(s => { scene.remove(s); s.material.dispose(); });
   }
   planes.length = 0;
+  const cached = modelCache[preset.model];
+  const haveTemplate = cached && !(cached instanceof Promise) && cached !== false;
   for (let i=0;i<n;i++) {
     const body  = preset.bodyColors[i % preset.bodyColors.length];
     const smoke = preset.smokeColors[(preset.smokeAssign?.[i] ?? 0) % preset.smokeColors.length];
     const p = new Plane(i, body, smoke);
-    if (planeTemplate) p.setMesh(planeTemplate);
-    else {
-      const fb = makeFallbackPlane(body);
-      p.group.add(fb);
+    if (haveTemplate) {
+      p.setMesh(cached, preset.modelScale);
+    } else {
+      p.group.add(makeFallbackPlane(body));
     }
     planes.push(p);
+  }
+  // Kick async load if the template isn't ready yet; reskin on completion.
+  if (!haveTemplate && cached !== false) {
+    const targetPreset = preset;
+    loadModelOnce(preset.model, preset.modelOrient).then(tpl => {
+      if (!tpl) return;
+      // Only reskin if the user is still on this preset.
+      if (TEAM_PRESETS[plan.preset] !== targetPreset) return;
+      for (const p of planes) {
+        p.group.clear();
+        p.setMesh(tpl, targetPreset.modelScale);
+      }
+    });
   }
 }
 
@@ -626,27 +694,15 @@ function makeFallbackPlane(color) {
   return g;
 }
 
-// Load plane template
-new GLTFLoader().load('b738.glb', gltf => {
-  const m = gltf.scene;
-  const b1 = new THREE.Box3().setFromObject(m);
-  const sz = b1.getSize(new THREE.Vector3());
-  const max = Math.max(sz.x, sz.y, sz.z);
-  m.scale.setScalar(7.5 / max);
-  const b2 = new THREE.Box3().setFromObject(m);
-  m.position.sub(b2.getCenter(new THREE.Vector3()));
-  planeTemplate = m;
-  // re-skin existing planes
-  for (const p of planes) {
-    p.group.clear();
-    p.setMesh(planeTemplate);
-  }
-}, undefined, () => {/* fallback already in place */});
+// Pre-warm all preset models in parallel so switching presets is instant.
+for (const ps of Object.values(TEAM_PRESETS)) loadModelOnce(ps.model, ps.modelOrient);
 
 // ---------- Smoke trails (per plane) ----------
 const smokeGeo = new THREE.PlaneGeometry(2.4, 2.4);
 function spawnSmoke(p, dt) {
   if (!p.smokeOn) return;
+  // Don't pile smoke at the spawn point while the sim is paused.
+  if (!sim.playing) return;
   p.smokeTimer += dt;
   if (p.smokeTimer < 0.05) return;
   p.smokeTimer = 0;
