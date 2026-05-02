@@ -2,14 +2,84 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0c121a">
 <title>飞行表演规划系统 — Air Show Planner</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{width:100%;height:100%;overflow:hidden;background:#0c121a;font-family:'Courier New','SF Mono',Menlo,monospace;color:#dfe6f0;user-select:none}
-canvas{display:block}
+html,body{width:100%;height:100%;overflow:hidden;background:#0c121a;font-family:'Courier New','SF Mono',Menlo,monospace;color:#dfe6f0;user-select:none;
+  /* iOS Safari address-bar safe height */
+  height:100vh; height:100dvh;
+  /* prevent overscroll bounce on mobile */
+  overscroll-behavior:none;
+  /* prevent double-tap zoom on iOS */
+  touch-action:manipulation;
+  /* respect notch */
+  padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);
+}
+canvas{display:block;touch-action:none}
 #app{position:fixed;inset:0;display:grid;grid-template-columns:380px 1fr;grid-template-rows:1fr;}
-@media(max-width:900px){#app{grid-template-columns:1fr;grid-template-rows:50% 50%}}
+@media(max-width:900px){
+  /* planner becomes a slide-in drawer; viewport takes the whole frame */
+  #app{grid-template-columns:1fr;grid-template-rows:1fr}
+  #planner{
+    position:fixed;left:0;top:0;bottom:0;
+    width:min(86vw, 360px);
+    z-index:40;
+    transform:translateX(-100%);
+    transition:transform .24s ease;
+    box-shadow:6px 0 20px rgba(0,0,0,.55);
+  }
+  #planner.open{transform:translateX(0)}
+  body.drawer-open #drawer-scrim{opacity:1;pointer-events:auto}
+  #drawer-scrim{
+    position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:35;
+    opacity:0;pointer-events:none;transition:opacity .24s ease;
+  }
+  #burger{
+    position:fixed;left:10px;top:calc(10px + env(safe-area-inset-top));z-index:50;
+    width:40px;height:40px;border-radius:6px;
+    background:rgba(0,12,16,.78);border:1px solid rgba(255,255,255,.32);
+    display:flex;align-items:center;justify-content:center;cursor:pointer;
+    color:#cfffe2;font-size:18px;
+  }
+  /* Camera bar: horizontal scrolling strip at the top, never blocks 3D */
+  #camMenu{
+    flex-direction:row;
+    left:60px;right:10px;top:calc(10px + env(safe-area-inset-top));gap:6px;
+    overflow-x:auto;overflow-y:hidden;white-space:nowrap;
+    scrollbar-width:none;
+    padding-right:6px;
+  }
+  #camMenu::-webkit-scrollbar{display:none}
+  #camMenu button{padding:8px 12px;font-size:11px;flex:0 0 auto}
+  /* Status bar moves below the cam strip on mobile */
+  #statusBar{top:calc(58px + env(safe-area-inset-top));padding:6px 12px;font-size:11px}
+  #statusBar .stage{font-size:12px;letter-spacing:2px}
+  #statusBar .next{font-size:9px}
+  /* Legend small bottom-left */
+  #legend{top:auto;bottom:80px;right:10px;font-size:9px;padding:6px 8px}
+  /* Comms menu: full-width responsive grid, bigger buttons */
+  #comms{bottom:80px;width:96vw;max-width:96vw;padding:8px 10px}
+  .comms-grid{grid-template-columns:repeat(2,1fr) !important;gap:8px}
+  #comms button{padding:8px 10px;font-size:12px;min-height:36px}
+  .comms-cat{font-size:10px}
+  /* Timeline thicker */
+  #timeline{left:10px;right:10px;bottom:max(10px, env(safe-area-inset-bottom));padding:10px 12px}
+  #tl-track{height:14px;min-height:14px}
+  /* Hide non-essential UI on tiny screens */
+}
+@media(max-width:600px){
+  #planner h1{font-size:13px;padding:10px 14px 0}
+  #planner h2{font-size:8px;padding:0 14px 8px}
+  #camMenu button{min-width:54px;padding:7px 6px}
+  #legend{display:none}
+}
+/* On desktop the burger never appears */
+#burger,#drawer-scrim{display:none}
+@media(max-width:900px){#burger,#drawer-scrim{display:flex}}
 
 #planner{background:#0e1623;border-right:1px solid #1f2a3c;overflow-y:auto;display:flex;flex-direction:column;font-size:12px}
 #planner h1{font-size:14px;letter-spacing:3px;color:#fff;padding:12px 16px 2px}
@@ -144,6 +214,8 @@ canvas{display:block}
 </head>
 <body>
 <div id="app">
+  <button id="burger" title="菜单">☰</button>
+  <div id="drawer-scrim"></div>
   <aside id="planner" class="scroll">
     <h1>飞行表演规划系统</h1>
     <h2>AIR SHOW PLANNER · v1.1</h2>
@@ -464,7 +536,10 @@ function resize() {
   camera.aspect = w/h;
   camera.updateProjectionMatrix();
 }
-renderer.setPixelRatio(Math.min(devicePixelRatio||1, 2));
+// Mobile detection — both pointer:coarse (touch) and small viewport, so
+// we don't accidentally penalise a touch-screen laptop docked to 1440p.
+const IS_MOBILE = matchMedia('(pointer:coarse)').matches && innerWidth < 900;
+renderer.setPixelRatio(Math.min(devicePixelRatio||1, IS_MOBILE ? 1.5 : 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -505,7 +580,7 @@ orbit.enabled = false;
 const sun = new THREE.DirectionalLight(0xfff2cc, 1.15);
 sun.position.set(500, 800, 300);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.mapSize.set(IS_MOBILE ? 1024 : 2048, IS_MOBILE ? 1024 : 2048);
 const sc = sun.shadow.camera;
 sc.left = -400; sc.right = 400; sc.top = 400; sc.bottom = -400; sc.near = 100; sc.far = 2500;
 sun.shadow.bias = -0.0003;
@@ -2261,6 +2336,28 @@ function bindSetup() {
 }
 bindSetup();
 
+// ---------- Mobile drawer ----------
+(function setupDrawer() {
+  const burger = document.getElementById('burger');
+  const scrim  = document.getElementById('drawer-scrim');
+  const aside  = document.getElementById('planner');
+  if (!burger || !scrim || !aside) return;
+  const close = () => { aside.classList.remove('open'); document.body.classList.remove('drawer-open'); };
+  const open  = () => { aside.classList.add('open');    document.body.classList.add('drawer-open'); };
+  burger.addEventListener('click', () => {
+    aside.classList.contains('open') ? close() : open();
+  });
+  scrim.addEventListener('click', close);
+  // Auto-close after picking a setup option on mobile so the canvas reappears.
+  aside.addEventListener('change', () => {
+    if (matchMedia('(max-width:900px)').matches) setTimeout(close, 250);
+  });
+  // Camera-bar tap on mobile auto-dismisses too.
+  document.querySelectorAll('#camMenu button').forEach(b => b.addEventListener('click', () => {
+    if (matchMedia('(max-width:900px)').matches) close();
+  }));
+})();
+
 document.getElementById('play').addEventListener('click', () => { sim.playing = true; });
 document.getElementById('pause').addEventListener('click', () => { sim.playing = false; });
 document.getElementById('restart').addEventListener('click', () => { rebuildAndReset(); sim.playing = true; });
@@ -2472,15 +2569,28 @@ document.querySelectorAll('#camMenu button[data-cam]').forEach(b => {
     }
   });
 });
-document.getElementById('tl-track').addEventListener('click', e => {
-  const r = e.currentTarget.getBoundingClientRect();
-  const t = ((e.clientX - r.left) / r.width) * sim.totalTime;
-  // Hard scrub: rebuild from scratch then advance
-  rebuildAndReset();
-  const stepT = 1/30;
-  sim.playing = false;
-  while (sim.time < t) advanceSim(Math.min(stepT, t - sim.time));
-});
+// Pointer-driven scrub — works for mouse, touch, and pen alike.
+(function bindScrub() {
+  const tr = document.getElementById('tl-track');
+  let dragging = false;
+  function scrubTo(clientX) {
+    const r = tr.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
+    const t = ratio * sim.totalTime;
+    rebuildAndReset();
+    const stepT = 1/30;
+    sim.playing = false;
+    while (sim.time < t) advanceSim(Math.min(stepT, t - sim.time));
+  }
+  tr.addEventListener('pointerdown', e => {
+    dragging = true;
+    tr.setPointerCapture(e.pointerId);
+    scrubTo(e.clientX);
+  });
+  tr.addEventListener('pointermove', e => { if (dragging) scrubTo(e.clientX); });
+  tr.addEventListener('pointerup',   () => { dragging = false; });
+  tr.addEventListener('pointercancel', () => { dragging = false; });
+})();
 
 function rebuildTimeline() {
   rebuildSchedule();
