@@ -40,6 +40,31 @@ canvas{display:block}
 .add-row button{background:#0a1119;border:1px solid #2c3a52;color:#aac8e8;padding:6px 4px;font:10px 'Courier New',monospace;cursor:pointer;border-radius:3px;letter-spacing:1px;font-weight:bold;transition:all .15s}
 .add-row button:hover{background:#1c3050;border-color:#4a90d8;color:#fff}
 
+#aircraftBar{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px}
+.acbtn{flex:0 0 auto;padding:5px 9px;font:bold 10px 'Courier New',monospace;background:#0a1119;border:1px solid #2c3a52;color:#aac8e8;cursor:pointer;border-radius:3px;letter-spacing:1px;transition:all .15s;min-width:34px;text-align:center}
+.acbtn .lead{color:#ffd24a;font-size:8px;display:block}
+.acbtn:hover{background:#1c3050;border-color:#4a90d8;color:#fff}
+.acbtn.active{background:#264a82;border-color:#4a90d8;color:#fff}
+.acbtn[data-locked="1"]{opacity:0.65;cursor:not-allowed}
+.acbtn .swatch{display:inline-block;width:8px;height:8px;border-radius:50%;border:1px solid rgba(255,255,255,.4);vertical-align:middle;margin-right:3px}
+.acbtn .badge{display:inline-block;background:#ff6633;color:#000;font-size:8px;padding:0 4px;border-radius:6px;margin-left:3px}
+
+#taskList{display:flex;flex-direction:column;gap:3px;margin-bottom:8px;max-height:160px;overflow-y:auto}
+#taskList .empty{font-size:10px;color:#5a6a82;letter-spacing:1px;text-align:center;padding:6px 0}
+.task{display:flex;align-items:center;gap:6px;background:#16223a;border:1px solid #243456;border-left:3px solid;padding:5px 8px;border-radius:3px;font-size:10px}
+.task .name{flex:1;color:#fff;letter-spacing:1px;font-weight:bold;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.task .meta{color:#9bb4d4;font-size:9px}
+.task .x{background:#0a1119;border:1px solid #2c3a52;color:#9bb4d4;padding:1px 5px;font:9px monospace;cursor:pointer;border-radius:2px}
+.task .x:hover{background:#5a1c20;color:#fff;border-color:#a44}
+
+#taskAddRow select,#taskAddRow input{background:#0a1119;color:#dfe6f0;border:1px solid #2c3a52;padding:5px 6px;font:10px 'Courier New',monospace;border-radius:3px}
+
+/* Per-aircraft task strips on the timeline */
+#tl-track{height:auto;min-height:8px}
+.tl-strip{position:absolute;left:0;right:0;height:3px;pointer-events:none}
+.tl-strip .task-bar{position:absolute;top:0;height:100%;border-radius:1px;opacity:0.85}
+
+
 #transport{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 #transport button{background:#0a1119;border:1px solid #2c3a52;color:#dfe6f0;padding:6px 10px;font:bold 11px monospace;cursor:pointer;border-radius:3px;letter-spacing:2px}
 #transport button:hover{background:#1c3050;border-color:#4a90d8;color:#fff}
@@ -136,7 +161,29 @@ canvas{display:block}
     </section>
 
     <section>
-      <h3>3 · 模拟控制 / RUN</h3>
+      <h3>3 · 各机任务 / AIRCRAFT TASKS</h3>
+      <div id="aircraftBar"></div>
+      <div id="taskList" class="scroll"></div>
+      <div class="add-row" id="taskAddRow" style="grid-template-columns:1fr 60px 50px auto;gap:4px;align-items:stretch">
+        <select id="taskType">
+          <option value="SOLO_LOOP">SOLO LOOP 筋斗</option>
+          <option value="SOLO_ROLL">SOLO ROLL 横滚</option>
+          <option value="BREAK_LEFT">BREAK 左脱</option>
+          <option value="BREAK_RIGHT">BREAK 右脱</option>
+          <option value="CLIMB_OUT">CLIMB OUT 拉起</option>
+          <option value="DIVE">DIVE 俯冲</option>
+        </select>
+        <input id="taskStart" type="number" placeholder="t" title="开始时刻 (s)">
+        <input id="taskDur" type="number" placeholder="dur" title="时长 (s)">
+        <button id="taskAdd">+ 添加</button>
+      </div>
+      <div style="font-size:9.5px;color:#7a90b0;margin-top:6px;letter-spacing:1px">
+        长机 (#1) 锁定为编队基准；其余飞机可在动作模块内插入独立任务。
+      </div>
+    </section>
+
+    <section>
+      <h3>4 · 模拟控制 / RUN</h3>
       <div id="transport">
         <button id="play" class="primary">▶ 起飞</button>
         <button id="pause">⏸</button>
@@ -147,7 +194,7 @@ canvas{display:block}
     </section>
 
     <section>
-      <h3>4 · 完整方案输出 / GENERATED PLAN</h3>
+      <h3>5 · 完整方案输出 / GENERATED PLAN</h3>
       <pre id="planText" class="scroll"></pre>
     </section>
   </aside>
@@ -208,6 +255,21 @@ const MODULE_DEFS = {
 
 const FORMATION_CYCLE = ['V','DIAMOND','ARROW','LINE','ECHELON_R','BOX'];
 
+// ---------- Per-aircraft tasks ----------
+// A task overrides the formation-following target of a single plane during
+// an absolute time window. Tasks compose on top of the formation target:
+// the base targetPos/targetQuat is computed normally, then the task's
+// transform is applied. After the task ends, the plane lerps back into
+// formation automatically because the base target snaps back.
+const TASK_DEFS = {
+  SOLO_LOOP:   { label:'SOLO LOOP · 独立筋斗',  defDur:10, color:'#ff6633' },
+  SOLO_ROLL:   { label:'SOLO ROLL · 独立横滚',  defDur:6,  color:'#ffcc33' },
+  BREAK_LEFT:  { label:'BREAK ← · 左脱队',      defDur:8,  color:'#33aaff' },
+  BREAK_RIGHT: { label:'BREAK → · 右脱队',      defDur:8,  color:'#33ddaa' },
+  CLIMB_OUT:   { label:'CLIMB OUT · 拉起',      defDur:6,  color:'#cc66ff' },
+  DIVE:        { label:'DIVE · 俯冲',           defDur:6,  color:'#ff66aa' },
+};
+
 // Default sample plan
 const plan = {
   preset: 'BAYI',
@@ -230,6 +292,14 @@ const plan = {
     { type:'LOW_PASS',         duration:14 },
     { type:'BREAK_LANDING',    duration:35 },
   ],
+  // Per-aircraft tasks: key = plane index, value = list of {type,start,duration}.
+  // Sample tasks during the cruise window (t = 79–87s): #2/#3 break out
+  // sideways while #5 performs a solo roll, then everyone rejoins the formation.
+  aircraftTasks: {
+    1: [{ type:'BREAK_LEFT',  start:80, duration:6 }],
+    2: [{ type:'BREAK_RIGHT', start:80, duration:6 }],
+    4: [{ type:'SOLO_ROLL',   start:81, duration:5 }],
+  },
 };
 
 // Recompute module start times
@@ -966,6 +1036,82 @@ function updatePlaneTargets(dt, mod, mt) {
       );
       p.targetQuat.copy(lq).multiply(spread);
     }
+
+    // Per-aircraft tasks: superimpose individual scripted behavior on top
+    // of the formation target. Skips the leader (idx 0) to keep formation
+    // anchor stable. After the task window the base target snaps back to
+    // formation-following and the smooth-pursuit lerp pulls the plane home.
+    if (i > 0) applyAircraftTask(p, i, sim.time, mod);
+  }
+}
+
+// ---------- Per-aircraft task application ----------
+function applyAircraftTask(p, idx, time, mod) {
+  // Suppress per-aircraft tasks during global "scattering" modules where
+  // their target is already heavily scripted.
+  if (mod && (mod.type === 'BOMB_BURST' || mod.type === 'MIRROR_PASS' || mod.type === 'BREAK_LANDING')) return;
+  const tasks = plan.aircraftTasks?.[idx];
+  if (!tasks) return;
+  const active = tasks.find(t => time >= t.start && time < t.start + t.duration);
+  if (!active) return;
+  const elapsed = time - active.start;
+  const tt = elapsed / active.duration;       // 0..1 progress
+
+  const baseQuat = p.targetQuat.clone();
+  const right = new THREE.Vector3(1,0,0).applyQuaternion(baseQuat);
+  const upV   = new THREE.Vector3(0,1,0).applyQuaternion(baseQuat);
+  const fwd   = new THREE.Vector3(0,0,-1).applyQuaternion(baseQuat);
+
+  switch (active.type) {
+    case 'SOLO_LOOP': {
+      // Vertical loop in the plane's local pitch axis
+      const angle = tt * Math.PI * 2;
+      const radius = 35;
+      // Center is "up" from the formation slot
+      const center = p.targetPos.clone().addScaledVector(upV, radius);
+      p.targetPos.copy(center)
+        .addScaledVector(upV, -Math.cos(angle) * radius)
+        .addScaledVector(fwd,  Math.sin(angle) * radius);
+      const dq = new THREE.Quaternion().setFromAxisAngle(right, angle);
+      p.targetQuat.copy(dq).multiply(baseQuat);
+      break;
+    }
+    case 'SOLO_ROLL': {
+      // Pure roll about local forward axis
+      const angle = tt * Math.PI * 2;
+      const dq = new THREE.Quaternion().setFromAxisAngle(fwd, angle);
+      p.targetQuat.copy(dq).multiply(baseQuat);
+      break;
+    }
+    case 'BREAK_LEFT':
+    case 'BREAK_RIGHT': {
+      // Eased lateral excursion that fully returns by task end (sine bump).
+      const sgn = active.type === 'BREAK_LEFT' ? -1 : 1;
+      const lateral = Math.sin(tt * Math.PI) * 55 * sgn;
+      const upBump  = Math.sin(tt * Math.PI) * 8;
+      p.targetPos.addScaledVector(right, lateral).addScaledVector(upV, upBump);
+      // Bank into the break and back out
+      const bank = Math.sin(tt * Math.PI) * 0.8 * sgn;
+      const dq = new THREE.Quaternion().setFromAxisAngle(fwd, -bank);
+      p.targetQuat.copy(dq).multiply(baseQuat);
+      break;
+    }
+    case 'CLIMB_OUT': {
+      const climb = Math.sin(tt * Math.PI) * 80;
+      const pitch = -Math.sin(tt * Math.PI) * 0.6;  // negative axis-angle on right = nose up
+      p.targetPos.addScaledVector(upV, climb);
+      const dq = new THREE.Quaternion().setFromAxisAngle(right, pitch);
+      p.targetQuat.copy(dq).multiply(baseQuat);
+      break;
+    }
+    case 'DIVE': {
+      const drop = -Math.sin(tt * Math.PI) * 80;
+      const pitch = Math.sin(tt * Math.PI) * 0.6;
+      p.targetPos.addScaledVector(upV, drop);
+      const dq = new THREE.Quaternion().setFromAxisAngle(right, pitch);
+      p.targetQuat.copy(dq).multiply(baseQuat);
+      break;
+    }
   }
 }
 
@@ -1124,6 +1270,96 @@ function renderModules() {
     elList.appendChild(div);
   });
 }
+// ---------- Aircraft task UI ----------
+let selectedAircraft = 1;  // skip leader (#0); default-select #2
+const elAcBar    = document.getElementById('aircraftBar');
+const elTaskList = document.getElementById('taskList');
+
+function renderAircraftBar() {
+  const ps = TEAM_PRESETS[plan.preset];
+  const n = plan.team.size;
+  elAcBar.innerHTML = '';
+  for (let i=0;i<n;i++) {
+    const b = document.createElement('button');
+    b.className = 'acbtn' + (i === selectedAircraft ? ' active' : '');
+    if (i === 0) b.dataset.locked = '1';
+    const col = ps.bodyColors[i % ps.bodyColors.length];
+    const hex = '#' + col.toString(16).padStart(6,'0');
+    const taskCount = (plan.aircraftTasks?.[i]?.length) || 0;
+    const lead = i === 0 ? '<span class="lead">LEAD</span>' : '';
+    const badge = taskCount ? `<span class="badge">${taskCount}</span>` : '';
+    b.innerHTML = `${lead}<span class="swatch" style="background:${hex}"></span>#${i+1}${badge}`;
+    b.dataset.i = i;
+    elAcBar.appendChild(b);
+  }
+}
+elAcBar.addEventListener('click', e => {
+  const b = e.target.closest('.acbtn');
+  if (!b) return;
+  const i = +b.dataset.i;
+  if (i === 0) return;  // leader is locked
+  selectedAircraft = i;
+  renderAircraftBar();
+  renderTaskList();
+});
+
+function renderTaskList() {
+  const tasks = (plan.aircraftTasks?.[selectedAircraft] || []);
+  if (!tasks.length) {
+    elTaskList.innerHTML = `<div class="empty">— 无独立任务 / no tasks —</div>`;
+    return;
+  }
+  elTaskList.innerHTML = '';
+  // Show in time order
+  [...tasks].sort((a,b) => a.start - b.start).forEach((t, idx) => {
+    const def = TASK_DEFS[t.type];
+    const div = document.createElement('div');
+    div.className = 'task';
+    div.style.borderLeftColor = def.color;
+    div.innerHTML = `
+      <span class="name">${def.label}</span>
+      <span class="meta">[${fmtTime(t.start)}+${t.duration}s]</span>
+      <button class="x" data-i="${idx}">×</button>
+    `;
+    elTaskList.appendChild(div);
+  });
+}
+elTaskList.addEventListener('click', e => {
+  const b = e.target.closest('button.x');
+  if (!b) return;
+  const idx = +b.dataset.i;
+  const arr = plan.aircraftTasks[selectedAircraft] || [];
+  // recover original index from sort order
+  const sorted = [...arr].sort((a,b) => a.start - b.start);
+  const tgt = sorted[idx];
+  const realIdx = arr.indexOf(tgt);
+  if (realIdx >= 0) arr.splice(realIdx, 1);
+  if (!arr.length) delete plan.aircraftTasks[selectedAircraft];
+  renderAircraftBar();
+  renderTaskList();
+  rebuildTimeline();
+  elPlanText.textContent = generatePlanText();
+});
+
+document.getElementById('taskAdd').addEventListener('click', () => {
+  if (selectedAircraft === 0) return;
+  const type = document.getElementById('taskType').value;
+  const startEl = document.getElementById('taskStart');
+  const durEl = document.getElementById('taskDur');
+  const def = TASK_DEFS[type];
+  const start = startEl.value !== '' ? +startEl.value : Math.max(0, Math.round(sim.time));
+  const duration = durEl.value !== '' ? +durEl.value : def.defDur;
+  if (!isFinite(start) || !isFinite(duration) || duration <= 0) return;
+  if (!plan.aircraftTasks) plan.aircraftTasks = {};
+  if (!plan.aircraftTasks[selectedAircraft]) plan.aircraftTasks[selectedAircraft] = [];
+  plan.aircraftTasks[selectedAircraft].push({ type, start, duration });
+  startEl.value = ''; durEl.value = '';
+  renderAircraftBar();
+  renderTaskList();
+  rebuildTimeline();
+  elPlanText.textContent = generatePlanText();
+});
+
 elList.addEventListener('click', e => {
   const b = e.target.closest('button');
   if (!b) return;
@@ -1217,6 +1453,32 @@ function rebuildTimeline() {
     tk.innerHTML = `<div class="tl-tip">${MODULE_DEFS[m.type].label.replace('编队变换 → ','编队变换 → '+(m.target||''))}</div>`;
     elTlTicks.appendChild(tk);
   }
+  // Per-aircraft task strips below the timeline ticks
+  if (plan.aircraftTasks) {
+    const ps = TEAM_PRESETS[plan.preset];
+    Object.keys(plan.aircraftTasks).forEach(k => {
+      const idx = +k;
+      const arr = plan.aircraftTasks[idx];
+      if (!arr || !arr.length) return;
+      const strip = document.createElement('div');
+      strip.className = 'tl-strip';
+      strip.style.top = (10 + idx*4) + 'px';
+      const swatch = ps.bodyColors[idx % ps.bodyColors.length];
+      const swHex = '#' + swatch.toString(16).padStart(6,'0');
+      for (const t of arr) {
+        const def = TASK_DEFS[t.type];
+        const bar = document.createElement('div');
+        bar.className = 'task-bar';
+        bar.style.left = (t.start/sim.totalTime*100) + '%';
+        bar.style.width = (t.duration/sim.totalTime*100) + '%';
+        bar.style.background = def.color;
+        bar.style.borderLeft = '2px solid ' + swHex;
+        bar.title = `#${idx+1} ${def.label} [${fmtTime(t.start)}+${t.duration}s]`;
+        strip.appendChild(bar);
+      }
+      elTlTicks.appendChild(strip);
+    });
+  }
 }
 
 function generatePlanText() {
@@ -1241,6 +1503,21 @@ function generatePlanText() {
     const ts = '['+fmtTime(m.start)+'-'+fmtTime(m.end)+']';
     lines.push(' '+String(i+1).padStart(2,' ')+'. '+ts+' '+def.label.split(' ·')[0]+extra+' ('+m.duration+'s)');
   });
+  // Per-aircraft tasks
+  const taskKeys = Object.keys(plan.aircraftTasks || {})
+    .filter(k => (plan.aircraftTasks[k]||[]).length)
+    .map(k => +k).sort((a,b) => a-b);
+  if (taskKeys.length) {
+    lines.push('');
+    lines.push('── 各机独立任务 / AIRCRAFT TASKS ──');
+    for (const k of taskKeys) {
+      const arr = [...plan.aircraftTasks[k]].sort((a,b) => a.start - b.start);
+      for (const t of arr) {
+        const def = TASK_DEFS[t.type];
+        lines.push(' #'+(k+1)+'  ['+fmtTime(t.start)+'+'+t.duration+'s]  '+def.label.split(' ·')[0]);
+      }
+    }
+  }
   return lines.join('\n');
 }
 
@@ -1279,9 +1556,19 @@ function rebuildAndReset() {
   document.getElementById('takeoffTime').value = plan.takeoffTime;
   plan.alt.cruise = (plan.alt.min + plan.alt.max) / 2;
   plan.speed.cruise = (plan.speed.min + plan.speed.max) / 2;
+  // Clamp selected aircraft to current team size
+  if (selectedAircraft >= plan.team.size) selectedAircraft = Math.max(1, plan.team.size - 1);
+  // Drop tasks pointing to non-existent planes after a team-size shrink
+  if (plan.aircraftTasks) {
+    for (const k of Object.keys(plan.aircraftTasks)) {
+      if (+k >= plan.team.size) delete plan.aircraftTasks[k];
+    }
+  }
   rebuildTimeline();
   resetSim();
   renderModules();
+  renderAircraftBar();
+  renderTaskList();
   elPlanText.textContent = generatePlanText();
   renderLegend();
 }
