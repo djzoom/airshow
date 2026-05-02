@@ -700,39 +700,75 @@ function tryLoadSatelliteImagery(venue) {
   } catch (e) { /* keep procedural */ }
 })();
 
-// Runway
+// ---------- Airport scene ----------
+// Custom airport.glb: a hand-modeled set with runway, taxiways, hangars,
+// tower with glass curtain, signs and bridges. We auto-scale it so its
+// longest axis (the runway) becomes ≈ TARGET_RUNWAY_LEN units to match
+// the existing flight model (takeoff covers ~25 sec at ~110 m/s ≈ 2750 m
+// world distance, so a 1600-unit runway is plenty). The mesh is dropped
+// at origin with its bbox grounded on y=0.
+const TARGET_RUNWAY_LEN = 1600;
+const airportGroup = new THREE.Group();
+scene.add(airportGroup);
+
+// Crowd-line marker stays explicit so the camera ground view has a
+// reference, no matter what the glb provides.
 {
-  const rw = new THREE.Mesh(new THREE.PlaneGeometry(60, 1600), new THREE.MeshStandardMaterial({color:0x202024, roughness:0.92}));
-  rw.rotation.x = -Math.PI/2;
-  rw.position.y = 0.05;
-  rw.receiveShadow = true;
-  scene.add(rw);
-  const sm = new THREE.MeshBasicMaterial({color:0xfff8c0});
-  for (let z=-740; z<=740; z+=60) {
-    const s = new THREE.Mesh(new THREE.PlaneGeometry(2, 26), sm);
-    s.rotation.x = -Math.PI/2;
-    s.position.set(0, 0.06, z);
-    scene.add(s);
-  }
-  // crowd line and show center marker (north of runway, +Z forward isn't ideal — show line is parallel to runway X axis at z=0)
-  const showLine = new THREE.Mesh(new THREE.PlaneGeometry(2000, 4), new THREE.MeshBasicMaterial({color:0xff7755}));
+  const showLine = new THREE.Mesh(
+    new THREE.PlaneGeometry(2200, 4),
+    new THREE.MeshBasicMaterial({color:0xff7755, transparent:true, opacity:0.85, depthWrite:false})
+  );
   showLine.rotation.x = -Math.PI/2;
-  showLine.position.set(-160, 0.07, 0); // crowd line
+  showLine.position.set(-180, 0.08, 0);
   scene.add(showLine);
 }
 
-// Hangars + tower
-function box(w,h,d,col){return new THREE.Mesh(new THREE.BoxGeometry(w,h,d), new THREE.MeshStandardMaterial({color:col,roughness:0.7}));}
-{
-  const hangar = box(90, 38, 55, 0xc9c2a8); hangar.position.set(180, 19, -260); hangar.castShadow=hangar.receiveShadow=true; scene.add(hangar);
-  const tower = box(15, 80, 15, 0xefe6cf); tower.position.set(-200, 40, -260); tower.castShadow=true; scene.add(tower);
-  const cab   = box(24, 12, 24, 0x2a4d8f); cab.position.set(-200, 86, -260); cab.castShadow=true; scene.add(cab);
-  for (let i=0;i<5;i++) {
-    const w=18+Math.random()*20, h=6+Math.random()*8, d=18+Math.random()*16;
-    const b=box(w,h,d, new THREE.Color().setHSL(0.08+Math.random()*0.1,0.1,0.6+Math.random()*0.2).getHex());
-    b.position.set(220+i*32, h/2, 80+Math.random()*40); b.castShadow=true; b.receiveShadow=true; scene.add(b);
+new GLTFLoader().load('airport.glb', gltf => {
+  const m = gltf.scene;
+  // Measure world bbox (Sketchfab-style scenes carry their own Y-up rotation,
+  // and Three.js GLTFLoader applies it during import — matrices in m are
+  // already correct).
+  m.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(m);
+  const sz = box.getSize(new THREE.Vector3());
+  // Longest horizontal axis = runway. Sometimes that's X, sometimes Z; we
+  // align it to world Z (our planes fly along ±Z).
+  const horiz = sz.x > sz.z ? 'x' : 'z';
+  const runway = Math.max(sz.x, sz.z);
+  const scale = TARGET_RUNWAY_LEN / runway;
+  if (horiz === 'x') m.rotation.y = Math.PI/2;  // turn runway from X to Z
+  m.scale.setScalar(scale);
+  // Recompute after the scale/rotation, then ground-align.
+  m.updateMatrixWorld(true);
+  const box2 = new THREE.Box3().setFromObject(m);
+  m.position.x -= (box2.min.x + box2.max.x) / 2;
+  m.position.z -= (box2.min.z + box2.max.z) / 2;
+  m.position.y -= box2.min.y;  // sit on y=0
+  m.traverse(c => { if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; }});
+  airportGroup.add(m);
+  console.log('[airport] loaded; runway', horiz.toUpperCase(), 'len', runway.toFixed(1), '→ scale', scale.toFixed(3));
+}, undefined, err => {
+  console.warn('[airport] load failed, using procedural fallback:', err && err.message);
+  // Procedural fallback so the app still has a runway if airport.glb is missing.
+  const rw = new THREE.Mesh(new THREE.PlaneGeometry(60, 1600),
+    new THREE.MeshStandardMaterial({color:0x202024, roughness:0.92}));
+  rw.rotation.x = -Math.PI/2; rw.position.y = 0.05; rw.receiveShadow = true;
+  airportGroup.add(rw);
+  const sm = new THREE.MeshBasicMaterial({color:0xfff8c0});
+  for (let z=-740; z<=740; z+=60) {
+    const s = new THREE.Mesh(new THREE.PlaneGeometry(2, 26), sm);
+    s.rotation.x = -Math.PI/2; s.position.set(0, 0.06, z);
+    airportGroup.add(s);
   }
-}
+  const hb = new THREE.Mesh(new THREE.BoxGeometry(90, 38, 55),
+    new THREE.MeshStandardMaterial({color:0xc9c2a8, roughness:0.7}));
+  hb.position.set(180, 19, -260); hb.castShadow = hb.receiveShadow = true;
+  airportGroup.add(hb);
+  const tw = new THREE.Mesh(new THREE.BoxGeometry(15, 80, 15),
+    new THREE.MeshStandardMaterial({color:0xefe6cf, roughness:0.7}));
+  tw.position.set(-200, 40, -260); tw.castShadow = true;
+  airportGroup.add(tw);
+});
 
 // Trees
 {
