@@ -95,8 +95,14 @@ canvas{display:block}
 
     <section>
       <h3>1 · 总体设置 / SETUP</h3>
+      <div class="field"><label>表演队 / Preset</label>
+        <select id="teamPreset">
+          <option value="BAYI">八一 · J-10 (6)</option>
+          <option value="THUNDERBIRDS">Thunderbirds · F-16 (6)</option>
+          <option value="FRECCE">Frecce · MB-339 (10)</option>
+        </select></div>
       <div class="field"><label>编队架数 / Team</label>
-        <input type="number" id="teamSize" min="3" max="9" value="6"></div>
+        <input type="number" id="teamSize" min="3" max="10" value="6"></div>
       <div class="field"><label>初始编队 / Initial</label>
         <select id="initFormation">
           <option value="TRAIL">TRAIL · 鱼贯</option>
@@ -155,10 +161,8 @@ canvas{display:block}
       <button data-cam="wide">WIDE</button>
     </div>
     <div id="legend">
-      <div class="row"><span class="sw" style="background:#ff4848"></span> RED</div>
-      <div class="row"><span class="sw" style="background:#fff"></span> WHITE</div>
-      <div class="row"><span class="sw" style="background:#4ea8ff"></span> BLUE</div>
-      <div class="row"><span class="sw" style="background:#ffd24a"></span> GOLD</div>
+      <div id="legendName" style="font-weight:bold;margin-bottom:4px;color:#ffd24a"></div>
+      <div id="legendRows"></div>
     </div>
     <div id="statusBar">
       <div class="stage" id="curModule">— STAND BY —</div>
@@ -206,6 +210,7 @@ const FORMATION_CYCLE = ['V','DIAMOND','ARROW','LINE','ECHELON_R','BOX'];
 
 // Default sample plan
 const plan = {
+  preset: 'BAYI',
   team: { size:6, initialFormation:'TRAIL' },
   alt:   { min:150, max:500, cruise:300 },
   speed: { min:80, max:140, cruise:110 },
@@ -428,15 +433,59 @@ function box(w,h,d,col){return new THREE.Mesh(new THREE.BoxGeometry(w,h,d), new 
   }
 }
 
+// ---------- Team presets ----------
+// Three world-famous display team configurations.
+// `model` path is currently a fallback to b738.glb until real airframe models
+// are provided; the presets are otherwise complete (sizes, colors, smoke).
+const TEAM_PRESETS = {
+  BAYI: {
+    label: '八一表演队 · J-10',
+    short: '八一 / Bayi',
+    model: 'b738.glb',
+    modelScale: 7.5,
+    teamSize: 6,
+    initialFormation: 'TRAIL',
+    bodyColors: [0xe73327, 0xffffff, 0x1f4cb8, 0x1f4cb8, 0xe73327, 0xffffff],
+    smokeColors: [0xe73327, 0xffffff, 0x1f4cb8],
+    // Per-plane smoke index into smokeColors. Length = teamSize.
+    smokeAssign: [0, 1, 2, 0, 1, 2],
+  },
+  THUNDERBIRDS: {
+    label: '雷鸟 · F-16',
+    short: 'Thunderbirds',
+    model: 'b738.glb',
+    modelScale: 7.5,
+    teamSize: 6,
+    initialFormation: 'TRAIL',
+    // White airframe with red & blue accents distributed across slots
+    bodyColors: [0xffffff, 0xe53b3b, 0x1f3fa8, 0xffffff, 0xe53b3b, 0x1f3fa8],
+    smokeColors: [0xffffff],
+    smokeAssign: [0, 0, 0, 0, 0, 0],
+  },
+  FRECCE: {
+    label: '三色箭 · MB-339',
+    short: 'Frecce Tricolori',
+    model: 'b738.glb',
+    modelScale: 6.5,
+    teamSize: 10,
+    initialFormation: 'V',
+    bodyColors: Array(10).fill(0x274a8c),
+    // Italian flag: green / white / red
+    smokeColors: [0x008c45, 0xffffff, 0xcd212a],
+    // Front 3 green, middle 4 white, rear 3 red — matches Frecce's actual arrangement
+    smokeAssign: [0, 0, 0, 1, 1, 1, 1, 2, 2, 2],
+  },
+};
+
 // ---------- Plane fleet ----------
-const PLANE_COLORS = [0xff4848, 0xffffff, 0x4ea8ff, 0xffd24a, 0xa055ff, 0x55ffaa, 0xff6688, 0x66e0ff, 0xddccaa];
 let planeTemplate = null;
 const planes = [];
 
 class Plane {
-  constructor(idx, color) {
+  constructor(idx, color, smokeColor) {
     this.idx = idx;
     this.color = color;
+    this.smokeColor = smokeColor ?? color;
     this.position = new THREE.Vector3();
     this.quaternion = new THREE.Quaternion();
     this.targetPos = new THREE.Vector3();
@@ -473,7 +522,7 @@ class Plane {
   }
 }
 
-function buildFleet(n) {
+function buildFleet(n, preset) {
   // Clean up old
   for (const p of planes) {
     scene.remove(p.group);
@@ -481,12 +530,12 @@ function buildFleet(n) {
   }
   planes.length = 0;
   for (let i=0;i<n;i++) {
-    const c = PLANE_COLORS[i % PLANE_COLORS.length];
-    const p = new Plane(i, c);
+    const body  = preset.bodyColors[i % preset.bodyColors.length];
+    const smoke = preset.smokeColors[(preset.smokeAssign?.[i] ?? 0) % preset.smokeColors.length];
+    const p = new Plane(i, body, smoke);
     if (planeTemplate) p.setMesh(planeTemplate);
     else {
-      // Fallback proxy
-      const fb = makeFallbackPlane(c);
+      const fb = makeFallbackPlane(body);
       p.group.add(fb);
     }
     planes.push(p);
@@ -531,7 +580,7 @@ function spawnSmoke(p, dt) {
   p.smokeTimer += dt;
   if (p.smokeTimer < 0.05) return;
   p.smokeTimer = 0;
-  const mat = new THREE.MeshBasicMaterial({color: p.color, transparent:true, opacity:0.85, depthWrite:false});
+  const mat = new THREE.MeshBasicMaterial({color: p.smokeColor, transparent:true, opacity:0.9, depthWrite:false});
   const s = new THREE.Mesh(smokeGeo, mat);
   const back = new THREE.Vector3(0, -0.3, 4).applyQuaternion(p.quaternion);
   s.position.copy(p.position).add(back);
@@ -640,7 +689,7 @@ function resetSim() {
   leaderState.quat.identity();   // forward = -Z
   leaderState.speed = 0;
 
-  buildFleet(plan.team.size);
+  buildFleet(plan.team.size, TEAM_PRESETS[plan.preset]);
   for (let i=0;i<planes.length;i++) {
     const off = formationOffset('TRAIL', planes.length, i);
     const wp = off.clone().applyQuaternion(leaderState.quat);
@@ -1117,12 +1166,19 @@ function bindSetup() {
       const v = t==='number' ? +el.value : el.value;
       if (grp) plan[grp][key] = v;
       else plan[key] = v;
-      // Recompute cruise alt mid
       plan.alt.cruise = (plan.alt.min + plan.alt.max) / 2;
       plan.speed.cruise = (plan.speed.min + plan.speed.max) / 2;
       rebuildAndReset();
     });
   }
+  // Preset switcher: applies team size + initial formation from the preset.
+  document.getElementById('teamPreset').addEventListener('change', e => {
+    plan.preset = e.target.value;
+    const ps = TEAM_PRESETS[plan.preset];
+    plan.team.size = ps.teamSize;
+    plan.team.initialFormation = ps.initialFormation;
+    rebuildAndReset();
+  });
 }
 bindSetup();
 
@@ -1165,7 +1221,9 @@ function rebuildTimeline() {
 
 function generatePlanText() {
   const lines = [];
+  const ps = TEAM_PRESETS[plan.preset];
   lines.push('═══ 飞行表演方案 / SHOW PLAN ═══');
+  lines.push('表演队   Team      : ' + ps.label);
   lines.push('编队架数 Team Size : ' + plan.team.size);
   lines.push('初始编队 Initial    : ' + plan.team.initialFormation);
   lines.push('表演高度 Alt Range : ' + plan.alt.min + ' ~ ' + plan.alt.max + ' m');
@@ -1211,6 +1269,7 @@ function updateUI() {
 
 function rebuildAndReset() {
   // Apply setup inputs
+  document.getElementById('teamPreset').value = plan.preset;
   document.getElementById('teamSize').value = plan.team.size;
   document.getElementById('initFormation').value = plan.team.initialFormation;
   document.getElementById('altMin').value = plan.alt.min;
@@ -1224,6 +1283,17 @@ function rebuildAndReset() {
   resetSim();
   renderModules();
   elPlanText.textContent = generatePlanText();
+  renderLegend();
+}
+
+function renderLegend() {
+  const ps = TEAM_PRESETS[plan.preset];
+  document.getElementById('legendName').textContent = ps.short;
+  const rows = ps.smokeColors.map(c => {
+    const hex = '#' + c.toString(16).padStart(6,'0');
+    return `<div class="row"><span class="sw" style="background:${hex}"></span> ${hex.toUpperCase()}</div>`;
+  }).join('');
+  document.getElementById('legendRows').innerHTML = rows;
 }
 
 rebuildAndReset();
