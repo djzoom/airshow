@@ -168,6 +168,7 @@ canvas{display:block}
           <option value="THUNDERBIRDS">Thunderbirds · F-16 (6)</option>
           <option value="FRECCE">Frecce · MB-339 (10)</option>
           <option value="RUSSIAN_KNIGHTS">Russian Knights · Su-27 (6)</option>
+          <option value="WHITE">纯白涂装 · White Livery (6)</option>
         </select></div>
       <div class="field"><label>表演场地 / Venue</label>
         <select id="venuePreset">
@@ -238,10 +239,13 @@ canvas{display:block}
   <main id="viewport">
     <canvas id="canvas"></canvas>
     <div id="camMenu">
-      <button data-cam="auto" class="active">AUTO</button>
-      <button data-cam="leader">LEADER</button>
-      <button data-cam="ground">GROUND</button>
-      <button data-cam="wide">WIDE</button>
+      <button data-cam="cinematic" class="active" title="自动剪辑">CINEMA</button>
+      <button data-cam="orbit_sun" title="逆光剪影绕镜">SUN</button>
+      <button data-cam="pov" title="飞行员视角">POV</button>
+      <button data-cam="leader" title="3rd person 长机后视">CHASE</button>
+      <button data-cam="auto">AUTO</button>
+      <button data-cam="ground" title="观众席">CROWD</button>
+      <button data-cam="wide" title="高空全景">WIDE</button>
       <button data-cam="free" title="鼠标拖拽自由视角">FREE</button>
       <button id="dnToggle" title="昼夜切换">☼</button>
     </div>
@@ -519,20 +523,29 @@ scene.add(fill);
 const runwayLightsGroup = new THREE.Group();
 scene.add(runwayLightsGroup);
 
-// PMREM environment for PBR reflections — gives the GLB metals proper
-// IBL even before any HDRi is loaded.
-import('./vendor/three/examples/jsm/environments/RoomEnvironment.js').then(({RoomEnvironment}) => {
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-}).catch(() => {});
+// (PMREM IBL is built from the Sky shader below; see refreshSkyEnvironment)
 
 function applyDayNight() {
   const s = SKY[dayNight] || SKY.day;
-  scene.background.set(s.bot);
   scene.fog.color.set(s.fog);
   sun.intensity = s.sun;
   hemi.intensity = s.hemi;
   fill.intensity = s.fill;
+  // Sun direction (elevation drives Sky shader colour & disc)
+  if (dayNight === 'dusk') sun.position.set(900, 90, 400);
+  else if (dayNight === 'night') sun.position.set(-200, -260, -800);
+  else sun.position.set(500, 600, 300);
+  // Sky shader presets — physical atmospheric scattering tuned per phase
+  if (typeof skyU !== 'undefined') {
+    if (dayNight === 'dusk') { skyU.turbidity.value = 11; skyU.rayleigh.value = 4.0; skyU.mieCoefficient.value = 0.012; skyU.mieDirectionalG.value = 0.92; }
+    else if (dayNight === 'night') { skyU.turbidity.value = 20; skyU.rayleigh.value = 0.4; skyU.mieCoefficient.value = 0.002; skyU.mieDirectionalG.value = 0.6; }
+    else { skyU.turbidity.value = 8; skyU.rayleigh.value = 2.0; skyU.mieCoefficient.value = 0.005; skyU.mieDirectionalG.value = 0.85; }
+    refreshSkyEnvironment();
+    // Use the sky shader as the visible background — no static color.
+    scene.background = null;
+  } else {
+    scene.background = new THREE.Color(s.bot);
+  }
   // Boost runway light visibility at night
   const lit = dayNight !== 'day' ? 1.0 : 0.35;
   runwayLightsGroup?.children?.forEach(m => {
@@ -540,30 +553,36 @@ function applyDayNight() {
     if (m.material) m.material.transparent = dayNight === 'day';
     m.scale.setScalar(dayNight === 'day' ? 1 : 1.6);
   });
-  // Sun position: lower at dusk
-  if (dayNight === 'dusk') sun.position.set(900, 200, 400);
-  else if (dayNight === 'night') sun.position.set(-200, 600, -800);
-  else sun.position.set(500, 800, 300);
 }
 
-// Sky gradient sphere
-{
-  const g = new THREE.SphereGeometry(5000, 32, 16);
-  const m = new THREE.ShaderMaterial({
-    uniforms:{ top:{value:skyTop}, bot:{value:skyBot}},
-    vertexShader:`varying vec3 vP;void main(){vP=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
-    fragmentShader:`uniform vec3 top;uniform vec3 bot;varying vec3 vP;void main(){float t=clamp(vP.y/2800.,0.,1.);gl_FragColor=vec4(mix(bot,top,pow(t,0.7)),1.);}`,
-    side:THREE.BackSide, depthWrite:false
-  });
-  scene.add(new THREE.Mesh(g, m));
+// Physically-based atmospheric sky (Preetham/O'Neil model). The same
+// sky.material is sampled by PMREMGenerator each time the sun moves so
+// IBL stays consistent with the visible sky.
+import {Sky} from './vendor/three/examples/jsm/objects/Sky.js';
+const sky = new Sky();
+sky.scale.setScalar(8000);
+scene.add(sky);
+const skyU = sky.material.uniforms;
+skyU.turbidity.value = 8;
+skyU.rayleigh.value = 2.0;
+skyU.mieCoefficient.value = 0.005;
+skyU.mieDirectionalG.value = 0.85;
+
+// Re-baked PMREM whenever the sun moves; cached so day-night transitions
+// don't keep allocating textures.
+const pmrem = new THREE.PMREMGenerator(renderer);
+let envRT = null;
+function refreshSkyEnvironment() {
+  // Move the Sky's "sun" uniform so the actual scene sun light + the
+  // shader sky agree on direction.
+  const dir = sun.position.clone().normalize();
+  skyU.sunPosition.value.copy(dir);
+  if (envRT) envRT.dispose();
+  envRT = pmrem.fromScene(sky, 0.0);
+  scene.environment = envRT.texture;
 }
 
-// Sun visual
-{
-  const m = new THREE.Mesh(new THREE.SphereGeometry(80,16,12), new THREE.MeshBasicMaterial({color:0xfff8c0}));
-  m.position.copy(sun.position).normalize().multiplyScalar(3800);
-  scene.add(m);
-}
+// (the Sky shader draws the sun disk procedurally, no extra mesh needed)
 
 // Clouds
 {
@@ -984,6 +1003,20 @@ const TEAM_PRESETS = {
     smokeAssign: [0, 1, 2, 0, 1, 2],
     credits: 'Su-27 model derived from Sketchfab CC-BY upload',
   },
+  WHITE: {
+    label: '纯白涂装 · Pure White',
+    short: 'WHITE LIVERY',
+    model: 'su27.glb',
+    modelOrient: { x: 0, y: Math.PI, z: 0 },
+    modelScale: 9,
+    teamSize: 6,
+    initialFormation: 'V',
+    // Uniform glossy white airframes — emphasises silhouette + smoke
+    bodyColors: Array(9).fill(0xffffff),
+    smokeColors: [0xffffff],
+    smokeAssign: [0,0,0,0,0,0,0,0,0],
+    credits: 'Same Su-27 mesh, identity-flat livery for poster shots',
+  },
 };
 
 // ---------- Plane fleet ----------
@@ -1283,7 +1316,7 @@ const sim = {
   formationStart: 0, // module-time when morph started
   burstScripts: null,
   pendingRegroup: null,
-  cam: 'auto',
+  cam: 'cinematic',
 };
 
 // Leader state: pure quaternion. Plane-forward = -Z in body frame (Three.js convention).
@@ -1923,6 +1956,68 @@ function updateCamera(dt) {
     orbit.update();
     return;
   }
+  else if (c === 'orbit_sun' && planes.length) {
+    // Backlit silhouette orbit — keeps the formation between camera and
+    // the sun for that classic display-team poster look.
+    const sunDir = sun.position.clone().normalize();
+    const t = sim.time * 0.10;
+    // Camera orbits perpendicular to sun→target axis at a moderate radius.
+    const r = 80 + spread * 1.0;
+    const tangent = new THREE.Vector3(-sunDir.z, 0.3, sunDir.x).normalize();
+    const bitan   = new THREE.Vector3().crossVectors(sunDir, tangent).normalize();
+    const offWorld = sunDir.clone().multiplyScalar(-r * 0.7)
+                          .addScaledVector(tangent, Math.cos(t)*r*0.7)
+                          .addScaledVector(bitan,  Math.sin(t)*r*0.4);
+    want.copy(planes[0].position).add(offWorld);
+    look.copy(planes[0].position);
+  }
+  else if (c === 'pov' && planes.length) {
+    // Pilot eye-point: just behind the cockpit, looking forward.
+    const lp = planes[0].position;
+    const lq = planes[0].quaternion;
+    const off = camTmp.set(0, 1.4, -1.2).applyQuaternion(lq);
+    want.copy(lp).add(off);
+    const aheadV = new THREE.Vector3(0, 1.0, -120).applyQuaternion(lq);
+    look.copy(lp).add(aheadV);
+    const bodyUp = new THREE.Vector3(0,1,0).applyQuaternion(lq);
+    camUp.copy(bodyUp);
+  }
+  else if (c === 'cinematic' && planes.length) {
+    // Auto-cut director: swaps among hero shots based on the active
+    // module so the final video always shows the right angle.
+    const mod = plan.modules[Math.max(0, sim.curIdx)];
+    const t = sim.time;
+    let mode = 'wide-banked';
+    if (!mod) mode = 'wide-banked';
+    else if (mod.type === 'TAKEOFF')         mode = 'crowd-low';
+    else if (mod.type === 'BREAK_LANDING')   mode = 'crowd-low';
+    else if (mod.type === 'BOMB_BURST')      mode = 'overhead';
+    else if (mod.type === 'LOW_PASS')        mode = 'crowd-pan';
+    else if (mod.type === 'MIRROR_PASS')     mode = 'wide-banked';
+    else if (FREE_FLY_MODULES?.has?.(mod.type)) mode = 'orbit-sun';
+    else mode = (Math.floor(t / 6) % 2 === 0) ? 'wide-banked' : 'orbit-sun';
+    if (mode === 'crowd-low') {
+      want.set(-260, 14, -40 + Math.sin(t*0.18) * 30);
+      look.copy(planes[0].position);
+    } else if (mode === 'overhead') {
+      want.copy(cx).add(new THREE.Vector3(40, 220 + spread * 0.4, 60));
+      look.copy(cx);
+    } else if (mode === 'crowd-pan') {
+      want.set(-260 + Math.sin(t*0.05) * 80, 22, 0);
+      look.copy(planes[0].position);
+    } else if (mode === 'orbit-sun') {
+      const sunDir = sun.position.clone().normalize();
+      const r = 100 + spread * 1.1;
+      const tangent = new THREE.Vector3(-sunDir.z, 0.25, sunDir.x).normalize();
+      want.copy(planes[0].position)
+          .addScaledVector(sunDir, -r*0.7)
+          .addScaledVector(tangent, Math.cos(t*0.12)*r*0.7);
+      look.copy(planes[0].position);
+    } else { // wide-banked
+      want.copy(cx).add(new THREE.Vector3(Math.cos(t*0.06)*220, 110 + spread*0.3, Math.sin(t*0.06)*220 + 80));
+      look.copy(cx);
+    }
+  }
 
   camera.up.copy(camUp);
   // Time-based smoothing — frame-rate independent. Leader cam is tighter.
@@ -2244,8 +2339,11 @@ function issueCall(call) {
     case 'HIGH_PASS':  mod = { type:'HIGH_PASS', duration:12 }; break;
     case 'MOVE': {
       // Aerobatic dictionary entry — the arg names a registered module.
+      // Demo mode: snap the formation to airshow altitude/speed BEFORE the
+      // move plays so the user sees the maneuver immediately.
       const def = MODULE_DEFS[arg];
       if (!def) break;
+      teleportToShowAlt();
       mod = { type: arg, duration: def.defDur };
       break;
     }
@@ -2253,6 +2351,41 @@ function issueCall(call) {
   if (!mod) return;
   insertAtCurrent(mod);
   announceCall(MODULE_DEFS[mod.type].label.replace('编队变换 → ','编队变换 → '+(mod.target||'')));
+  sim.playing = true;
+}
+
+// Snap leader and followers to a clean show-position above runway centre,
+// flying along -Z at cruise speed. Used when a maneuver is invoked while
+// the sim is still on the ground (TAKEOFF) or hasn't started.
+function teleportToShowAlt() {
+  const showAlt = Math.max(220, plan.alt.cruise);
+  leaderState.pos.set(0, showAlt, 350);
+  leaderState.quat.identity();             // facing -Z
+  leaderState.speed = plan.speed.cruise;
+  // Skip past TAKEOFF/CLIMB if we're still in them
+  for (let i = 0; i < plan.modules.length; i++) {
+    const t = plan.modules[i].type;
+    if (t === 'TAKEOFF' || t === 'CLIMB') {
+      sim.time = plan.modules[i].end;
+      sim.curIdx = i;
+    } else break;
+  }
+  // Snap each plane to its formation slot in world coordinates so the
+  // smooth-pursuit lerp doesn't drag them along the ground for a few s.
+  const lq = leaderState.quat;
+  const lp = leaderState.pos;
+  const n = planes.length;
+  for (let i=0;i<n;i++) {
+    const off = formationOffset(plan.team.initialFormation, n, i);
+    const wp = off.clone().applyQuaternion(lq);
+    const p = planes[i];
+    p.position.copy(lp).add(wp);
+    p.quaternion.copy(lq);
+    p.targetPos.copy(p.position);
+    p.targetQuat.copy(p.quaternion);
+    // Sweep any old ribbon points so the trail starts fresh in the air.
+    if (p.ribbon) for (const e of p.ribbon.ring) e.age = 999;
+  }
 }
 
 function insertAtCurrent(mod, offset = 0) {
