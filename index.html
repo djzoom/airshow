@@ -391,6 +391,12 @@ canvas{display:block;touch-action:none}
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+import {RGBELoader} from 'three/addons/loaders/RGBELoader.js';
+import {EffectComposer} from 'three/addons/postprocessing/EffectComposer.js';
+import {RenderPass}     from 'three/addons/postprocessing/RenderPass.js';
+import {UnrealBloomPass}from 'three/addons/postprocessing/UnrealBloomPass.js';
+import {SMAAPass}       from 'three/addons/postprocessing/SMAAPass.js';
+import {OutputPass}     from 'three/addons/postprocessing/OutputPass.js';
 
 /* ================================================================
    AIR SHOW PLANNER
@@ -535,6 +541,8 @@ function resize() {
   renderer.setSize(w, h, false);
   camera.aspect = w/h;
   camera.updateProjectionMatrix();
+  if (typeof composer !== 'undefined' && composer) composer.setSize(w, h);
+  if (typeof bloomPass !== 'undefined' && bloomPass) bloomPass.setSize(w, h);
 }
 // Mobile detection — both pointer:coarse (touch) and small viewport, so
 // we don't accidentally penalise a touch-screen laptop docked to 1440p.
@@ -647,15 +655,43 @@ skyU.mieDirectionalG.value = 0.85;
 // don't keep allocating textures.
 const pmrem = new THREE.PMREMGenerator(renderer);
 let envRT = null;
+let usingHDRi = false;        // once a sIBL HDRi is loaded, we lock its env in
 function refreshSkyEnvironment() {
   // Move the Sky's "sun" uniform so the actual scene sun light + the
   // shader sky agree on direction.
   const dir = sun.position.clone().normalize();
   skyU.sunPosition.value.copy(dir);
+  if (usingHDRi) return;       // HDRi env wins over the procedural Sky bake
   if (envRT) envRT.dispose();
   envRT = pmrem.fromScene(sky, 0.0);
   scene.environment = envRT.texture;
 }
+
+// ---------- Optional sIBL HDRi ----------
+// Try a local file first, then the Polyhaven CDN. Both are skipped
+// silently when offline / blocked, in which case the Sky-shader IBL
+// (already in scene.environment) keeps working.
+const HDRI_LOCAL  = 'hdri/show.hdr';
+const HDRI_REMOTE = 'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloofendal_43d_clear_puresky_1k.hdr';
+function tryLoadHDRi(url) {
+  return new Promise(res => {
+    new RGBELoader().load(url, tex => {
+      tex.mapping = THREE.EquirectangularReflectionMapping;
+      const rt = pmrem.fromEquirectangular(tex);
+      tex.dispose();
+      if (envRT) envRT.dispose();
+      envRT = rt;
+      scene.environment = rt.texture;
+      usingHDRi = true;
+      console.log('[hdri] loaded', url);
+      res(true);
+    }, undefined, () => res(false));
+  });
+}
+queueMicrotask(async () => {
+  if (await tryLoadHDRi(HDRI_LOCAL)) return;
+  await tryLoadHDRi(HDRI_REMOTE);
+});
 
 // (the Sky shader draws the sun disk procedurally, no extra mesh needed)
 
@@ -1289,7 +1325,8 @@ function makeRibbon(plane) {
       varying vec3 vColor;
       void main() {
         if (vAlpha < 0.005) discard;
-        gl_FragColor = vec4(vColor, vAlpha);
+        // Push past Bloom's HDR threshold so the trail edges glow softly.
+        gl_FragColor = vec4(vColor * 1.55, vAlpha);
       }`,
   });
   const mesh = new THREE.Mesh(geo, mat);
@@ -1908,14 +1945,45 @@ function frame(now) {
   // Camera
   updateCamera(dt);
 
-  renderer.render(scene, camera);
-
-  // 2D overlays — cheap, runs every frame
-
-
+  composer.render();
 
   requestAnimationFrame(frame);
 }
+
+// ---------- Post-processing chain ----------
+// RenderPass writes the linear scene into an HDR float target;
+// UnrealBloomPass adds a soft halo around HDR-bright pixels (smoke
+// trails get vColor*1.55 in the ribbon shader, well past threshold);
+// SMAAPass removes aliasing on long thin edges (skipped on mobile);
+// OutputPass does the final tone map + sRGB conversion. We have to
+// neutralise the renderer's own tonemap so it isn't applied twice.
+const composer = new EffectComposer(renderer);
+composer.setPixelRatio(renderer.getPixelRatio());
+composer.addPass(new RenderPass(scene, camera));
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(canvas.clientWidth || 1, canvas.clientHeight || 1),
+  /*strength*/ IS_MOBILE ? 0.35 : 0.55,
+  /*radius*/   0.7,
+  /*threshold*/0.95   // only the brightest emissives + ribbon glow
+);
+composer.addPass(bloomPass);
+if (!IS_MOBILE) composer.addPass(new SMAAPass(canvas.clientWidth || 1, canvas.clientHeight || 1));
+const outputPass = new OutputPass();
+composer.addPass(outputPass);
+// We render the scene LINEAR, let Bloom add HDR halos, then OutputPass
+// performs ACES tone mapping + sRGB conversion on the way to the screen.
+renderer.toneMapping = THREE.NoToneMapping;
+outputPass.material.uniforms.toneMappingExposure = { value: 1.0 };
+// (OutputPass picks up renderer.toneMappingExposure at draw time)
+renderer.toneMappingExposure = 1.0;
+// Tell OutputPass which curve to apply
+outputPass.material.defines = outputPass.material.defines || {};
+// Three's OutputShader switch is THREE.LinearToneMapping/etc as numeric
+// constants. Defaulting renderer.toneMapping back to ACES is enough since
+// OutputPass copies it at .render() time.
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+// Ensure both renderer + composer are sized to the live layout.
+resize();
 
 
 function advanceSim(dt) {
