@@ -91,6 +91,43 @@ canvas{display:block}
 
 #viewport{position:relative;background:#000}
 #viewport canvas{position:absolute;inset:0;width:100%;height:100%}
+#hud{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;mix-blend-mode:screen}
+#hud.off{display:none}
+
+/* DCS-style flight control panel — bottom right */
+#fcs{position:absolute;right:14px;bottom:60px;background:rgba(0,16,18,.55);border:1px solid #0f6;border-radius:6px;padding:10px 12px;color:#9fffc8;font:bold 10px 'Courier New',monospace;letter-spacing:1px;text-shadow:0 0 4px rgba(0,255,128,.4);box-shadow:0 0 14px rgba(0,255,128,.12) inset}
+.fcs-row{display:flex;gap:14px;align-items:flex-end}
+.fcs-block{display:flex;flex-direction:column;align-items:center;gap:4px}
+.fcs-lbl{font-size:9px;color:#0f6;letter-spacing:2px}
+.fcs-val{font-size:10px;color:#cfffe2}
+.fcs-bar{position:relative;background:rgba(0,32,24,.7);border:1px solid #0f6;border-radius:2px;overflow:hidden}
+.fcs-bar.v{width:14px;height:90px}
+.fcs-bar.h{width:90px;height:10px}
+.fcs-fill{position:absolute;background:linear-gradient(0deg,#0f6,#0fc);box-shadow:0 0 6px rgba(0,255,128,.6)}
+.fcs-bar.v .fcs-fill{left:0;right:0;bottom:0;height:50%}
+.fcs-bar.h .fcs-fill{top:0;bottom:0;width:50%;left:50%;transform-origin:left center;background:linear-gradient(90deg,#0f6,#0fc)}
+.fcs-stick{position:relative;width:90px;height:90px;background:radial-gradient(circle,rgba(0,32,24,.7) 60%,rgba(0,16,18,.55));border:1px solid #0f6;border-radius:50%;overflow:visible}
+.fcs-stick::before,.fcs-stick::after{content:'';position:absolute;background:rgba(0,255,128,.25)}
+.fcs-stick::before{left:50%;top:0;bottom:0;width:1px;transform:translateX(-50%)}
+.fcs-stick::after{top:50%;left:0;right:0;height:1px;transform:translateY(-50%)}
+.fcs-stick-knob{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:10px;height:10px;background:#0fc;border-radius:50%;box-shadow:0 0 8px #0fc}
+
+/* DCS-style instant-call menu */
+#comms{position:absolute;left:50%;bottom:60px;transform:translateX(-50%) translateY(120%);background:rgba(0,12,16,.85);border:1px solid #0f6;border-radius:6px;padding:10px 14px;color:#9fffc8;font:bold 11px 'Courier New',monospace;letter-spacing:1px;text-shadow:0 0 4px rgba(0,255,128,.4);box-shadow:0 0 16px rgba(0,255,128,.18);transition:transform .18s;pointer-events:auto;max-width:90vw}
+#comms.open{transform:translateX(-50%) translateY(0)}
+.comms-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid rgba(0,255,128,.25)}
+.comms-title{color:#0fc;font-size:11px;letter-spacing:2px}
+.comms-hint{color:#5d9b86;font-size:9px;letter-spacing:1px}
+.comms-hint kbd{background:#0a1c14;border:1px solid #0f6;padding:1px 5px;border-radius:2px;font:bold 9px 'Courier New',monospace;color:#cfffe2}
+.comms-grid{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:14px}
+.comms-col{display:flex;flex-direction:column;gap:3px}
+.comms-cat{color:#0f6;font-size:9px;letter-spacing:2px;margin-bottom:4px}
+#comms button{display:flex;align-items:center;gap:8px;background:rgba(0,32,24,.65);border:1px solid rgba(0,255,128,.35);color:#cfffe2;padding:5px 10px;font:bold 11px 'Courier New',monospace;cursor:pointer;border-radius:3px;letter-spacing:1px;transition:all .12s}
+#comms button:hover{background:rgba(0,80,55,.85);border-color:#0fc;color:#fff;box-shadow:0 0 8px rgba(0,255,128,.4)}
+#comms button kbd{background:#0a1c14;border:1px solid #0f6;padding:0 5px;border-radius:2px;font:bold 9px 'Courier New',monospace;color:#0fc;min-width:14px;text-align:center}
+
+#camMenu button#hudToggle{background:rgba(0,32,24,.55);border-color:#0a4}
+#camMenu button#hudToggle.active{background:rgba(0,80,55,.85);border-color:#0f6;color:#cfffe2}
 
 #statusBar{position:absolute;top:10px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.18);padding:8px 18px;border-radius:4px;text-align:center;pointer-events:none;text-shadow:1px 1px 0 #000}
 #statusBar .stage{font-size:14px;color:#fff;letter-spacing:3px;font-weight:bold}
@@ -213,11 +250,14 @@ canvas{display:block}
 
   <main id="viewport">
     <canvas id="canvas"></canvas>
+    <canvas id="hud" width="1600" height="1000"></canvas>
+
     <div id="camMenu">
       <button data-cam="auto" class="active">AUTO</button>
       <button data-cam="leader">LEADER</button>
       <button data-cam="ground">GROUND</button>
       <button data-cam="wide">WIDE</button>
+      <button id="hudToggle" class="active" title="切换 HUD">HUD</button>
     </div>
     <div id="legend">
       <div id="legendName" style="font-weight:bold;margin-bottom:4px;color:#ffd24a"></div>
@@ -228,6 +268,64 @@ canvas{display:block}
       <div class="next">NEXT · <span id="nextModule">…</span></div>
     </div>
     <div id="announce"><div class="name" id="annName"></div><div class="sub" id="annSub"></div></div>
+
+    <!-- Flight-control panel (lower right) -->
+    <div id="fcs">
+      <div class="fcs-row">
+        <div class="fcs-block">
+          <div class="fcs-lbl">THR</div>
+          <div class="fcs-bar v"><div class="fcs-fill" id="fcsThr"></div></div>
+          <div class="fcs-val" id="fcsThrVal">0%</div>
+        </div>
+        <div class="fcs-block">
+          <div class="fcs-lbl">STICK</div>
+          <div class="fcs-stick"><div class="fcs-stick-knob" id="fcsStick"></div></div>
+        </div>
+        <div class="fcs-block">
+          <div class="fcs-lbl">RUD</div>
+          <div class="fcs-bar h"><div class="fcs-fill" id="fcsRud"></div></div>
+          <div class="fcs-val" id="fcsBank">0°</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Instant-call comms menu (DCS-style) — toggle with ` / -->
+    <div id="comms">
+      <div class="comms-hdr">
+        <span class="comms-title">⌨ FLIGHT CALL · 编队呼叫</span>
+        <span class="comms-hint">按 <kbd>`</kbd> 关闭 · 按字母触发</span>
+      </div>
+      <div class="comms-grid">
+        <div class="comms-col">
+          <div class="comms-cat">1 · 编队 FORM</div>
+          <button data-call="FORM:V"><kbd>Q</kbd> V 字</button>
+          <button data-call="FORM:DIAMOND"><kbd>A</kbd> 菱形</button>
+          <button data-call="FORM:ARROW"><kbd>Z</kbd> 箭头</button>
+          <button data-call="FORM:LINE"><kbd>1</kbd> 横排</button>
+          <button data-call="FORM:TRAIL"><kbd>2</kbd> 鱼贯</button>
+          <button data-call="FORM:ECHELON_R"><kbd>3</kbd> 右梯</button>
+        </div>
+        <div class="comms-col">
+          <div class="comms-cat">2 · 特技 STUNT</div>
+          <button data-call="LOOP"><kbd>W</kbd> 筋斗</button>
+          <button data-call="BARREL_ROLL"><kbd>S</kbd> 横滚</button>
+          <button data-call="BOMB_BURST"><kbd>X</kbd> 爆破</button>
+          <button data-call="MIRROR_PASS"><kbd>4</kbd> 对穿</button>
+        </div>
+        <div class="comms-col">
+          <div class="comms-cat">3 · 高度 ALT</div>
+          <button data-call="CLIMB:500"><kbd>E</kbd> 爬升</button>
+          <button data-call="CLIMB:200"><kbd>D</kbd> 下降</button>
+          <button data-call="CRUISE"><kbd>C</kbd> 巡航</button>
+        </div>
+        <div class="comms-col">
+          <div class="comms-cat">4 · 通场 PASS</div>
+          <button data-call="LOW_PASS"><kbd>R</kbd> 低空</button>
+          <button data-call="HIGH_PASS"><kbd>F</kbd> 高空</button>
+        </div>
+      </div>
+    </div>
+
     <div id="timeline">
       <div id="tl-track"><div id="tl-fill"></div><div id="tl-marker"></div><div id="tlticks"></div></div>
     </div>
@@ -1271,7 +1369,269 @@ function frame(now) {
   updateCamera(dt);
 
   renderer.render(scene, camera);
+
+  // 2D overlays — cheap, runs every frame
+  drawHUD();
+  updateFCS();
+
   requestAnimationFrame(frame);
+}
+
+// ---------- HUD (DCS-style overlay) ----------
+const hudCanvas = document.getElementById('hud');
+const hudCtx = hudCanvas.getContext('2d');
+let hudOn = true;
+
+function resizeHUD() {
+  const r = hudCanvas.getBoundingClientRect();
+  const dpr = Math.min(devicePixelRatio||1, 2);
+  hudCanvas.width = Math.max(1, r.width * dpr);
+  hudCanvas.height = Math.max(1, r.height * dpr);
+  hudCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+new ResizeObserver(resizeHUD).observe(hudCanvas);
+resizeHUD();
+
+function drawHUD() {
+  if (!hudOn) { hudCtx.clearRect(0, 0, hudCanvas.width, hudCanvas.height); return; }
+  const w = hudCanvas.clientWidth, h = hudCanvas.clientHeight;
+  hudCtx.clearRect(0, 0, w, h);
+
+  // Derive flight state from the leader.
+  const fwd = leaderForward();
+  const speed = leaderState.speed;
+  const altM = Math.max(0, leaderState.pos.y);
+  const speedKt = speed * 1.94384;
+  const altFt = altM * 3.281;
+  const hdgDeg = ((-Math.atan2(fwd.x, -fwd.z) * 180/Math.PI) + 360) % 360;
+  const pitchDeg = Math.asin(Math.max(-1, Math.min(1, fwd.y))) * 180/Math.PI;
+  // Roll from world-up vs body-up.
+  const bodyUp = new THREE.Vector3(0,1,0).applyQuaternion(leaderState.quat);
+  const right  = new THREE.Vector3(1,0,0).applyQuaternion(leaderState.quat);
+  const rollDeg = Math.atan2(right.y, bodyUp.y) * 180/Math.PI;
+
+  const cx = w/2, cy = h/2;
+  hudCtx.save();
+  hudCtx.strokeStyle = '#0fc';
+  hudCtx.fillStyle = '#9fffc8';
+  hudCtx.font = 'bold 12px "Courier New", monospace';
+  hudCtx.lineWidth = 1.4;
+  hudCtx.shadowColor = 'rgba(0,255,160,.35)';
+  hudCtx.shadowBlur = 4;
+
+  // Pitch ladder — rotate-roll, translate-pitch, draw 5°-step horizon ticks.
+  hudCtx.save();
+  hudCtx.translate(cx, cy);
+  hudCtx.rotate(-rollDeg * Math.PI/180);
+  const pxPerDeg = 7;
+  const py0 = pitchDeg * pxPerDeg;
+  for (let p = -90; p <= 90; p += 5) {
+    const y = -((p - pitchDeg) * pxPerDeg);
+    if (y < -h/2 || y > h/2) continue;
+    const isHorizon = p === 0;
+    const wide = isHorizon ? 360 : (p % 10 === 0 ? 110 : 60);
+    hudCtx.beginPath();
+    if (isHorizon) {
+      hudCtx.moveTo(-wide/2, y); hudCtx.lineTo(-30, y);
+      hudCtx.moveTo(30, y); hudCtx.lineTo(wide/2, y);
+    } else {
+      // tick wings curl down for negative pitch (looking-down convention)
+      const tipDir = p > 0 ? 1 : -1;
+      hudCtx.moveTo(-wide/2, y); hudCtx.lineTo(-wide/2, y + 6 * -tipDir);
+      hudCtx.moveTo(-wide/2, y); hudCtx.lineTo(-30, y);
+      hudCtx.moveTo(30, y); hudCtx.lineTo(wide/2, y);
+      hudCtx.moveTo(wide/2, y); hudCtx.lineTo(wide/2, y + 6 * -tipDir);
+    }
+    hudCtx.stroke();
+    if (p % 10 === 0 && p !== 0) {
+      hudCtx.fillText(p.toString(), -wide/2 - 24, y + 4);
+      hudCtx.fillText(p.toString(),  wide/2 + 6, y + 4);
+    }
+  }
+  hudCtx.restore();
+
+  // Waterline (fixed, marks aircraft body axis)
+  hudCtx.beginPath();
+  hudCtx.moveTo(cx - 50, cy); hudCtx.lineTo(cx - 18, cy);
+  hudCtx.moveTo(cx - 18, cy); hudCtx.lineTo(cx - 6, cy + 10);
+  hudCtx.moveTo(cx + 6, cy + 10); hudCtx.lineTo(cx + 18, cy);
+  hudCtx.moveTo(cx + 18, cy); hudCtx.lineTo(cx + 50, cy);
+  hudCtx.stroke();
+
+  // Flight Path Marker — small circle with 3 stubs at the velocity direction.
+  // Project the velocity vector to screen using the renderer's camera.
+  const vWorld = leaderState.pos.clone().add(fwd);
+  const vNDC = vWorld.clone().project(camera);
+  const fpmX = (vNDC.x * 0.5 + 0.5) * w;
+  const fpmY = (-vNDC.y * 0.5 + 0.5) * h;
+  if (vNDC.z < 1) {
+    hudCtx.beginPath();
+    hudCtx.arc(fpmX, fpmY, 6, 0, Math.PI*2);
+    hudCtx.moveTo(fpmX - 6, fpmY); hudCtx.lineTo(fpmX - 14, fpmY);
+    hudCtx.moveTo(fpmX + 6, fpmY); hudCtx.lineTo(fpmX + 14, fpmY);
+    hudCtx.moveTo(fpmX, fpmY - 6); hudCtx.lineTo(fpmX, fpmY - 12);
+    hudCtx.stroke();
+  }
+
+  // Bank-angle arc at top
+  hudCtx.save();
+  hudCtx.translate(cx, 96);
+  hudCtx.beginPath();
+  hudCtx.arc(0, 0, 90, Math.PI*0.85, Math.PI*0.15, false);
+  hudCtx.stroke();
+  for (const a of [-60,-45,-30,-10,0,10,30,45,60]) {
+    const rad = (a - 90) * Math.PI/180;
+    const r1 = 90, r2 = (a%30 === 0) ? 84 : 87;
+    hudCtx.beginPath();
+    hudCtx.moveTo(Math.cos(rad)*r1, Math.sin(rad)*r1);
+    hudCtx.lineTo(Math.cos(rad)*r2, Math.sin(rad)*r2);
+    hudCtx.stroke();
+  }
+  // Bank pointer (downward triangle indicating current roll on the arc)
+  const bankRad = (-rollDeg - 90) * Math.PI/180;
+  hudCtx.save();
+  hudCtx.rotate(bankRad);
+  hudCtx.beginPath();
+  hudCtx.moveTo(0, 78); hudCtx.lineTo(-5, 70); hudCtx.lineTo(5, 70); hudCtx.closePath();
+  hudCtx.fillStyle = '#0fc';
+  hudCtx.fill();
+  hudCtx.restore();
+  hudCtx.restore();
+
+  // Speed tape — left side
+  drawTape(hudCtx, 60, cy, 80, 280, speedKt, 10, 'KT', false);
+  // Altitude tape — right side
+  drawTape(hudCtx, w - 60, cy, 80, 280, altFt, 100, 'FT', true);
+
+  // Heading tape — top center
+  drawHeadingTape(hudCtx, cx, 36, 360, 22, hdgDeg);
+
+  // Mission state — bottom left
+  hudCtx.fillStyle = '#9fffc8';
+  hudCtx.font = 'bold 11px "Courier New", monospace';
+  hudCtx.fillText('PITCH ' + pitchDeg.toFixed(0).padStart(3,' ') + '°', 16, h - 92);
+  hudCtx.fillText('ROLL  ' + rollDeg.toFixed(0).padStart(3,' ') + '°', 16, h - 76);
+  hudCtx.fillText('AOA   ' + (Math.max(-9, Math.min(15, pitchDeg + 2))).toFixed(0).padStart(3,' ') + '°', 16, h - 60);
+
+  hudCtx.restore();
+}
+
+function drawTape(ctx, x, cy, width, height, value, step, unit, rightAlign) {
+  ctx.save();
+  ctx.translate(x, cy);
+  ctx.strokeStyle = '#0fc';
+  ctx.fillStyle = '#9fffc8';
+  ctx.lineWidth = 1.2;
+  // Frame
+  ctx.beginPath();
+  ctx.rect(-width/2, -height/2, width, height);
+  ctx.stroke();
+  // Center value box
+  ctx.beginPath();
+  ctx.rect(-width/2 - 6, -10, width + 12, 20);
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(0,40,30,.7)';
+  ctx.fillRect(-width/2 - 6, -10, width + 12, 20);
+  ctx.fillStyle = '#cfffe2';
+  ctx.font = 'bold 14px "Courier New", monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(Math.round(value).toString(), 0, 5);
+  // Tick marks
+  ctx.font = 'bold 10px "Courier New", monospace';
+  ctx.fillStyle = '#9fffc8';
+  ctx.strokeStyle = '#0c8';
+  const pxPerStep = 18;
+  const start = Math.floor((value - height/2/pxPerStep*step) / step) * step;
+  const end   = Math.ceil((value + height/2/pxPerStep*step) / step) * step;
+  for (let v = start; v <= end; v += step) {
+    const y = (value - v) * pxPerStep / step;
+    if (y < -height/2 || y > height/2) continue;
+    const major = (v % (step*5) === 0);
+    const tickW = major ? 12 : 6;
+    ctx.beginPath();
+    ctx.moveTo(width/2, y); ctx.lineTo(width/2 - tickW, y);
+    ctx.stroke();
+    if (major) {
+      ctx.textAlign = rightAlign ? 'right' : 'left';
+      const tx = rightAlign ? (width/2 - tickW - 4) : (-width/2 + 4);
+      ctx.fillText(v.toString(), tx, y + 4);
+    }
+  }
+  // Unit label at bottom
+  ctx.fillStyle = '#0fc';
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 9px "Courier New", monospace';
+  ctx.fillText(unit, 0, height/2 + 14);
+  ctx.restore();
+}
+
+function drawHeadingTape(ctx, cx, cy, width, height, hdg) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.strokeStyle = '#0fc';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.rect(-width/2, -height/2, width, height);
+  ctx.stroke();
+  // Lubber line in center
+  ctx.beginPath();
+  ctx.moveTo(0, -height/2 - 6); ctx.lineTo(-5, -height/2); ctx.lineTo(5, -height/2); ctx.closePath();
+  ctx.fillStyle = '#0fc'; ctx.fill();
+  // Tick numbers
+  ctx.font = 'bold 10px "Courier New", monospace';
+  ctx.fillStyle = '#9fffc8';
+  ctx.strokeStyle = '#0c8';
+  ctx.textAlign = 'center';
+  const pxPerDeg = 4;
+  const range = width / pxPerDeg;
+  for (let h = -range/2; h <= range/2; h += 5) {
+    const dh = ((Math.round(hdg + h) % 360) + 360) % 360;
+    const x = h * pxPerDeg;
+    if (Math.abs(x) > width/2) continue;
+    const major = (dh % 10 === 0);
+    ctx.beginPath();
+    ctx.moveTo(x, -height/2); ctx.lineTo(x, -height/2 + (major ? 8 : 4));
+    ctx.stroke();
+    if (major) {
+      const lbl = dh === 0 ? 'N' : dh === 90 ? 'E' : dh === 180 ? 'S' : dh === 270 ? 'W' : (dh/10|0).toString();
+      ctx.fillText(lbl, x, height/2 - 4);
+    }
+  }
+  // Current heading number readout
+  ctx.fillStyle = '#cfffe2';
+  ctx.font = 'bold 13px "Courier New", monospace';
+  ctx.fillText(Math.round(hdg).toString().padStart(3,'0') + '°', 0, height/2 + 18);
+  ctx.restore();
+}
+
+// ---------- FCS panel ----------
+const fcsThr  = document.getElementById('fcsThr');
+const fcsThrVal = document.getElementById('fcsThrVal');
+const fcsRud  = document.getElementById('fcsRud');
+const fcsBank = document.getElementById('fcsBank');
+const fcsStick = document.getElementById('fcsStick');
+
+function updateFCS() {
+  // Throttle inferred from current speed vs cruise.
+  const thr = Math.max(0, Math.min(1, leaderState.speed / 200));
+  fcsThr.style.height = (thr * 100) + '%';
+  fcsThrVal.textContent = (thr * 100 | 0) + '%';
+  // Roll → rudder bar
+  const bodyUp = new THREE.Vector3(0,1,0).applyQuaternion(leaderState.quat);
+  const right  = new THREE.Vector3(1,0,0).applyQuaternion(leaderState.quat);
+  const rollDeg = Math.atan2(right.y, bodyUp.y) * 180/Math.PI;
+  fcsBank.textContent = (rollDeg | 0) + '°';
+  // Map roll to a -1..1 ratio for the rudder bar (visual proxy)
+  const rudR = Math.max(-1, Math.min(1, rollDeg / 60));
+  fcsRud.style.left = '50%';
+  fcsRud.style.width = (Math.abs(rudR) * 50) + '%';
+  fcsRud.style.transform = rudR < 0 ? 'scaleX(-1)' : 'scaleX(1)';
+  // Stick: pitch = vertical, roll = horizontal
+  const fwd = leaderForward();
+  const pitchDeg = Math.asin(Math.max(-1, Math.min(1, fwd.y))) * 180/Math.PI;
+  const sx = Math.max(-1, Math.min(1, rollDeg / 45)) * 35;
+  const sy = -Math.max(-1, Math.min(1, pitchDeg / 45)) * 35;
+  fcsStick.style.transform = `translate(calc(-50% + ${sx}px), calc(-50% + ${sy}px))`;
 }
 
 function advanceSim(dt) {
@@ -1565,11 +1925,138 @@ document.getElementById('smokeToggle').addEventListener('click', e => {
 });
 // Spacebar = play/pause toggle, common in flight sims.
 addEventListener('keydown', e => {
-  if (e.code === 'Space' && !/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) {
+  if (/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return;
+  if (e.code === 'Space') { e.preventDefault(); sim.playing = !sim.playing; return; }
+  if (e.code === 'Backquote' || e.code === 'Slash') { e.preventDefault(); toggleComms(); return; }
+  if (commsOpen && commsKeyMap[e.code]) {
     e.preventDefault();
-    sim.playing = !sim.playing;
+    issueCall(commsKeyMap[e.code]);
   }
 });
+
+document.getElementById('hudToggle').addEventListener('click', e => {
+  hudOn = !hudOn;
+  document.getElementById('hud').classList.toggle('off', !hudOn);
+  e.currentTarget.classList.toggle('active', hudOn);
+});
+
+// ---------- Instant-call comms menu ----------
+let commsOpen = false;
+const commsEl = document.getElementById('comms');
+
+function toggleComms() {
+  commsOpen = !commsOpen;
+  commsEl.classList.toggle('open', commsOpen);
+}
+
+const commsKeyMap = {
+  KeyQ: 'FORM:V', KeyA: 'FORM:DIAMOND', KeyZ: 'FORM:ARROW',
+  Digit1: 'FORM:LINE', Digit2: 'FORM:TRAIL', Digit3: 'FORM:ECHELON_R',
+  KeyW: 'LOOP', KeyS: 'BARREL_ROLL', KeyX: 'BOMB_BURST', Digit4: 'MIRROR_PASS',
+  KeyE: 'CLIMB:500', KeyD: 'CLIMB:200', KeyC: 'CRUISE',
+  KeyR: 'LOW_PASS', KeyF: 'HIGH_PASS',
+};
+
+commsEl.addEventListener('click', e => {
+  const b = e.target.closest('button[data-call]');
+  if (!b) return;
+  issueCall(b.dataset.call);
+});
+
+// Inject a module immediately after the current one (or after the locked
+// BREAK_LANDING moves down). The leader picks it up in the next frame.
+function issueCall(call) {
+  const [type, arg] = call.split(':');
+  let mod;
+  switch (type) {
+    case 'FORM':       mod = { type:'FORMATION_CHANGE', duration:8, target: arg }; break;
+    case 'LOOP':       mod = { type:'LOOP', duration:14 }; break;
+    case 'BARREL_ROLL':mod = { type:'BARREL_ROLL', duration:8 }; break;
+    case 'BOMB_BURST': mod = { type:'BOMB_BURST', duration:8 };
+      // queue a regroup right after so planes don't drift apart forever.
+      insertAtCurrent({ type:'BOMB_BURST', duration:8 });
+      mod = { type:'REGROUP', duration:10, formation:'V' };
+      insertAtCurrent(mod, /*offset*/1);
+      announceCall('BOMB BURST + REGROUP'); return;
+    case 'MIRROR_PASS':mod = { type:'MIRROR_PASS', duration:14 }; break;
+    case 'CLIMB':      mod = { type:'CLIMB', duration:10, target: +arg }; break;
+    case 'CRUISE':     mod = { type:'CRUISE', duration:10 }; break;
+    case 'LOW_PASS':   mod = { type:'LOW_PASS', duration:14 }; break;
+    case 'HIGH_PASS':  mod = { type:'HIGH_PASS', duration:12 }; break;
+  }
+  if (!mod) return;
+  insertAtCurrent(mod);
+  announceCall(MODULE_DEFS[mod.type].label.replace('编队变换 → ','编队变换 → '+(mod.target||'')));
+}
+
+function insertAtCurrent(mod, offset = 0) {
+  // Insert just after the currently-running module, but before the locked
+  // BREAK_LANDING tail so the show still ends with a landing.
+  const last = plan.modules.length - 1;
+  let pos = Math.min(Math.max(0, sim.curIdx + 1 + offset), last);
+  // Don't insert past the locked landing
+  if (MODULE_DEFS[plan.modules[pos].type]?.locked && pos === last) pos = last;
+  plan.modules.splice(pos, 0, mod);
+  // Re-schedule absolute times in place — keep simulation running, no reset.
+  let t = plan.takeoffTime;
+  for (const m of plan.modules) {
+    m.start = t;
+    m.end = t + (m.duration||MODULE_DEFS[m.type].defDur);
+    t = m.end;
+  }
+  plan.totalTime = t;
+  sim.totalTime = t;
+  rebuildTimelineMarks();
+  renderModules();
+  elPlanText.textContent = generatePlanText();
+}
+
+function rebuildTimelineMarks() {
+  // Lightweight version of rebuildTimeline that doesn't re-clone tasks; only ticks.
+  elTlTicks.innerHTML = '';
+  for (const m of plan.modules) {
+    const tk = document.createElement('div');
+    tk.className = 'tl-tick';
+    tk.style.left = (m.start/sim.totalTime*100) + '%';
+    tk.innerHTML = `<div class="tl-tip">${MODULE_DEFS[m.type].label.replace('编队变换 → ','编队变换 → '+(m.target||''))}</div>`;
+    elTlTicks.appendChild(tk);
+  }
+  // Restore per-aircraft strips
+  if (plan.aircraftTasks) {
+    const ps = TEAM_PRESETS[plan.preset];
+    Object.keys(plan.aircraftTasks).forEach(k => {
+      const idx = +k;
+      const arr = plan.aircraftTasks[idx];
+      if (!arr || !arr.length) return;
+      const strip = document.createElement('div');
+      strip.className = 'tl-strip';
+      strip.style.top = (10 + idx*4) + 'px';
+      const swatch = ps.bodyColors[idx % ps.bodyColors.length];
+      const swHex = '#' + swatch.toString(16).padStart(6,'0');
+      for (const t of arr) {
+        const def = TASK_DEFS[t.type];
+        const bar = document.createElement('div');
+        bar.className = 'task-bar';
+        bar.style.left = (t.start/sim.totalTime*100) + '%';
+        bar.style.width = (t.duration/sim.totalTime*100) + '%';
+        bar.style.background = def.color;
+        bar.style.borderLeft = '2px solid ' + swHex;
+        bar.title = `#${idx+1} ${def.label} [${fmtTime(t.start)}+${t.duration}s]`;
+        strip.appendChild(bar);
+      }
+      elTlTicks.appendChild(strip);
+    });
+  }
+}
+
+function announceCall(text) {
+  const el = document.getElementById('announce');
+  document.getElementById('annName').textContent = '⌨ CALL';
+  document.getElementById('annSub').textContent = text;
+  el.classList.add('show');
+  clearTimeout(announceCall._t);
+  announceCall._t = setTimeout(() => el.classList.remove('show'), 1400);
+}
 document.getElementById('simSpeed').addEventListener('input', e => {
   sim.speed = +e.target.value;
   document.getElementById('spdLabel').textContent = sim.speed.toFixed(2);
