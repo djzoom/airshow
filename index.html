@@ -746,7 +746,7 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.22;
+renderer.toneMappingExposure = 0.9;
 renderer.physicallyCorrectLights = true;
 
 const scene = new THREE.Scene();
@@ -814,9 +814,9 @@ function applyDayNight() {
   else sun.position.set(500, 600, 300);
   // Sky shader presets — physical atmospheric scattering tuned per phase
   if (typeof skyU !== 'undefined') {
-    if (dayNight === 'dusk') { skyU.turbidity.value = 11; skyU.rayleigh.value = 4.0; skyU.mieCoefficient.value = 0.012; skyU.mieDirectionalG.value = 0.92; }
-    else if (dayNight === 'night') { skyU.turbidity.value = 20; skyU.rayleigh.value = 0.4; skyU.mieCoefficient.value = 0.002; skyU.mieDirectionalG.value = 0.6; }
-    else { skyU.turbidity.value = 8; skyU.rayleigh.value = 2.0; skyU.mieCoefficient.value = 0.005; skyU.mieDirectionalG.value = 0.85; }
+    if (dayNight === 'dusk') { skyU.turbidity.value = 7; skyU.rayleigh.value = 2.6; skyU.mieCoefficient.value = 0.008; skyU.mieDirectionalG.value = 0.9; }
+    else if (dayNight === 'night') { skyU.turbidity.value = 18; skyU.rayleigh.value = 0.3; skyU.mieCoefficient.value = 0.002; skyU.mieDirectionalG.value = 0.6; }
+    else { skyU.turbidity.value = 3.0; skyU.rayleigh.value = 1.2; skyU.mieCoefficient.value = 0.004; skyU.mieDirectionalG.value = 0.82; }
     refreshSkyEnvironment();
     // Use the sky shader as the visible background — no static color.
     scene.background = null;
@@ -840,10 +840,12 @@ const sky = new Sky();
 sky.scale.setScalar(8000);
 scene.add(sky);
 const skyU = sky.material.uniforms;
-skyU.turbidity.value = 8;
-skyU.rayleigh.value = 2.0;
-skyU.mieCoefficient.value = 0.005;
-skyU.mieDirectionalG.value = 0.85;
+// Initial values match SKY.day in applyDayNight() — keeps the sky a
+// true daylight blue instead of the white-out the defaults produced.
+skyU.turbidity.value = 3.0;
+skyU.rayleigh.value = 1.2;
+skyU.mieCoefficient.value = 0.004;
+skyU.mieDirectionalG.value = 0.82;
 
 // Re-baked PMREM whenever the sun moves; cached so day-night transitions
 // don't keep allocating textures.
@@ -889,20 +891,8 @@ queueMicrotask(async () => {
 
 // (the Sky shader draws the sun disk procedurally, no extra mesh needed)
 
-// Clouds
-{
-  const cm = new THREE.MeshBasicMaterial({color:0xffffff, transparent:true, opacity:0.8, depthWrite:false});
-  for (let i=0;i<35;i++) {
-    const g = new THREE.Group();
-    for (let k=0;k<5;k++) {
-      const m = new THREE.Mesh(new THREE.SphereGeometry(20+Math.random()*30, 8, 6), cm);
-      m.position.set((Math.random()-0.5)*60, (Math.random()-0.5)*15, (Math.random()-0.5)*40);
-      g.add(m);
-    }
-    g.position.set((Math.random()-0.5)*5500, 280+Math.random()*350, (Math.random()-0.5)*5500);
-    scene.add(g);
-  }
-}
+// (Clouds removed — sphere-cluster billboards read as plastic; the Sky
+//  shader's atmospheric haze carries the high-altitude depth cue alone.)
 
 // Ground
 const groundGeo = new THREE.PlaneGeometry(9000, 9000, 80, 80);
@@ -2156,9 +2146,9 @@ composer.setPixelRatio(renderer.getPixelRatio());
 composer.addPass(new RenderPass(scene, camera));
 const bloomPass = new UnrealBloomPass(
   new THREE.Vector2(canvas.clientWidth || 1, canvas.clientHeight || 1),
-  /*strength*/ IS_MOBILE ? 0.35 : 0.55,
-  /*radius*/   0.7,
-  /*threshold*/0.95   // only the brightest emissives + ribbon glow
+  /*strength*/ IS_MOBILE ? 0.18 : 0.28,
+  /*radius*/   0.55,
+  /*threshold*/1.10   // sky stays solid; only ribbon×1.55 + lights bloom
 );
 composer.addPass(bloomPass);
 if (!IS_MOBILE) composer.addPass(new SMAAPass(canvas.clientWidth || 1, canvas.clientHeight || 1));
