@@ -2,1936 +2,1261 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MU5735 3D Flight Reconstruction</title>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
+<title>飞行表演规划系统 — Air Show Planner</title>
 <style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{overflow:hidden;background:#000;font-family:'Courier New',monospace;color:#c0d8c0}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{width:100%;height:100%;overflow:hidden;background:#0c121a;font-family:'Courier New','SF Mono',Menlo,monospace;color:#dfe6f0;user-select:none}
 canvas{display:block}
-.panel{
-  background:transparent!important;border:none!important;border-radius:0;
-  padding:10px 14px;backdrop-filter:none!important;
-}
-/* Force transparent on ID-targeted panels (defeat any cache / inherit issue) */
-#p-events,#p-source,#src-list,#p-flight,#p-info,#p-controls,#p-title{
-  background:transparent!important;border:none!important;backdrop-filter:none!important;
-}
-/* True text-OUTLINE via 4-corner offset shadows + soft halo.
-   Works on any background, regardless of brightness/colour. */
-.panel,.panel *{text-shadow:
-  -1px -1px 0 rgba(0,0,0,.95),
-   1px -1px 0 rgba(0,0,0,.95),
-  -1px  1px 0 rgba(0,0,0,.95),
-   1px  1px 0 rgba(0,0,0,.95),
-   0 0 3px rgba(0,0,0,.7)}
-.panel .btn{text-shadow:none}
-.panel #timeline,.panel #event-banner,.panel #alt-bar{text-shadow:none}
-/* Emphasis on important values — extra glow on top of outline */
-.val,#phase-label{text-shadow:
-  -1px -1px 0 rgba(0,0,0,.95), 1px -1px 0 rgba(0,0,0,.95),
-  -1px  1px 0 rgba(0,0,0,.95), 1px  1px 0 rgba(0,0,0,.95),
-   0 0 5px rgba(0,0,0,.8)}
-.val.warning{text-shadow:
-  -1px -1px 0 rgba(0,0,0,.95), 1px -1px 0 rgba(0,0,0,.95),
-  -1px  1px 0 rgba(0,0,0,.95), 1px  1px 0 rgba(0,0,0,.95),
-   0 0 6px rgba(255,68,68,.7)}
-.evt.active{text-shadow:
-  -1px -1px 0 rgba(0,0,0,.95), 1px -1px 0 rgba(0,0,0,.95),
-  -1px  1px 0 rgba(0,0,0,.95), 1px  1px 0 rgba(0,0,0,.95),
-   0 0 5px rgba(255,68,68,.55)}
-#hud{position:absolute;inset:0;pointer-events:none;font-size:12px}
+#app{position:fixed;inset:0;display:grid;grid-template-columns:380px 1fr;grid-template-rows:1fr;}
+@media(max-width:900px){#app{grid-template-columns:1fr;grid-template-rows:50% 50%}}
 
-#p-title{position:absolute;top:12px;left:50%;transform:translateX(-50%);text-align:center;padding:8px 28px;white-space:nowrap}
-#p-title .main{font-size:15px;letter-spacing:2px;color:#ffffff;font-weight:bold}
-#p-title .sub{font-size:10px;color:#cce6cc;margin-top:2px;font-weight:bold}
-#p-title .warn-line{font-size:10px;color:#ff8866;margin-bottom:3px;font-weight:bold}
-#p-title .src-tag{font-size:9.5px;color:rgba(220,220,220,.78);margin-top:4px;letter-spacing:.8px;font-weight:bold;text-shadow:0 1px 1px rgba(0,0,0,.6),0 0 2px rgba(0,0,0,.6)}
+#planner{background:#0e1623;border-right:1px solid #1f2a3c;overflow-y:auto;display:flex;flex-direction:column;font-size:12px}
+#planner h1{font-size:14px;letter-spacing:3px;color:#fff;padding:12px 16px 2px}
+#planner h2{font-size:9px;letter-spacing:3px;color:#7a90b0;padding:0 16px 12px;font-weight:normal;border-bottom:1px solid #1f2a3c}
+#planner section{padding:12px 16px;border-bottom:1px solid #1f2a3c}
+#planner h3{font-size:11px;letter-spacing:2px;color:#9bb4d4;margin-bottom:10px;font-weight:bold}
 
-#p-flight{position:absolute;top:12px;left:14px;line-height:1.9;min-width:175px}
-.lbl{color:#cdf2d6;display:inline-block;width:48px;text-align:right;margin-right:4px;font-weight:bold}
-.val{color:#ffffff;font-weight:bold}
-#phase-label{font-size:13px;margin-bottom:4px;font-weight:bold}
-.derived{font-size:8px;color:#d8e6f0;vertical-align:super;font-weight:bold}
+.field{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px;font-size:11px;line-height:1.5}
+.field label{color:#aab8c8;letter-spacing:1px}
+.field input,.field select{background:#0a1119;color:#dfe6f0;border:1px solid #2c3a52;padding:4px 8px;font:11px 'Courier New',monospace;border-radius:3px;width:110px}
+.field .row{display:flex;gap:6px;align-items:center}
+.field .row input{width:50px}
+.field .unit{color:#5a6a82;font-size:10px;margin-left:4px}
 
-#p-info{position:absolute;top:12px;right:14px;line-height:1.9;text-align:right;min-width:185px}
+#moduleList{display:flex;flex-direction:column;gap:4px;margin-bottom:10px;max-height:280px;overflow-y:auto}
+.mod{display:flex;align-items:center;gap:6px;background:#16223a;border:1px solid #243456;border-left:3px solid #4a90d8;padding:6px 8px;border-radius:3px;font-size:11px;cursor:default}
+.mod.active{border-color:#ffaa00;background:#3a2c12;box-shadow:0 0 12px rgba(255,170,0,.3)}
+.mod.passed{opacity:0.45;border-left-color:#5a6a82}
+.mod .num{color:#7a90b0;width:20px;text-align:right}
+.mod .name{flex:1;color:#fff;letter-spacing:1px;font-weight:bold;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mod .meta{color:#9bb4d4;font-size:9px;letter-spacing:1px}
+.mod .ctrl{display:flex;gap:2px}
+.mod .ctrl button{background:#0a1119;border:1px solid #2c3a52;color:#9bb4d4;padding:2px 5px;font:9px monospace;cursor:pointer;border-radius:2px}
+.mod .ctrl button:hover{background:#1c2a44;color:#fff}
+.mod[data-locked="1"] .ctrl{visibility:hidden}
 
-#p-alt{position:absolute;right:14px;top:50%;transform:translateY(-50%);width:30px;height:250px;padding:0;overflow:hidden}
-#alt-bar{position:absolute;bottom:0;width:100%;background:linear-gradient(to top,#ff4444,#ffaa00 40%,#00cc66);transition:height .15s}
-#alt-num{position:absolute;top:-18px;left:0;width:100%;text-align:center;font-size:9px;color:#dcecdc;font-weight:bold}
+.add-row{display:grid;grid-template-columns:1fr 1fr;gap:4px}
+.add-row button{background:#0a1119;border:1px solid #2c3a52;color:#aac8e8;padding:6px 4px;font:10px 'Courier New',monospace;cursor:pointer;border-radius:3px;letter-spacing:1px;font-weight:bold;transition:all .15s}
+.add-row button:hover{background:#1c3050;border-color:#4a90d8;color:#fff}
 
-#p-controls{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);text-align:center;pointer-events:auto;padding:10px 22px}
-.btn-row{display:flex;justify-content:center;gap:4px;flex-wrap:wrap;margin-bottom:8px}
-.btn{padding:5px 13px;background:rgba(0,30,18,.75);border:1px solid rgba(0,255,136,.65);color:#cbf3dc;cursor:pointer;border-radius:3px;font:bold 11px 'Courier New',monospace;pointer-events:auto;transition:background .15s,border-color .15s,color .15s,box-shadow .15s;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.5)}
-.btn:hover{background:rgba(0,80,42,.85);border-color:rgba(0,255,136,1);color:#fff}
-.btn.active{background:rgba(0,170,90,.92);color:#fff;border-color:#00ff88;box-shadow:0 0 9px rgba(0,255,136,.55),0 1px 2px rgba(0,0,0,.4)}
-.sep{width:1px;background:rgba(0,255,136,.15);margin:0 4px}
-/* Speed selector — hover-expanding dropdown */
-.btn-speed-wrap{position:relative;display:inline-block;pointer-events:auto}
-.speed-menu{display:none;position:absolute;bottom:100%;left:50%;transform:translateX(-50%);margin-bottom:5px;flex-direction:column;gap:3px;padding:4px;background:rgba(0,30,18,.92);border:1px solid rgba(0,255,136,.55);border-radius:4px;box-shadow:0 2px 6px rgba(0,0,0,.5);z-index:30}
-.btn-speed-wrap:hover .speed-menu,.btn-speed-wrap:focus-within .speed-menu{display:flex}
-.speed-menu .speed-opt{display:block;width:48px;padding:4px 8px;text-align:center}
-#timeline{width:min(560px,72vw);height:6px;background:rgba(0,0,0,.5);border:1px solid rgba(180,180,180,.55);border-radius:3px;margin:6px auto;cursor:pointer;position:relative;box-shadow:0 1px 3px rgba(0,0,0,.4)}
-#timeline-fill{height:100%;background:linear-gradient(90deg,#00cc66,#ff4444);border-radius:3px;width:0}
-#timeline-marker{position:absolute;top:-4px;width:12px;height:12px;background:#ddd;border-radius:50%;transform:translateX(-50%);left:0;z-index:3}
-#time-text{font-size:10px;color:#dcf2dc;margin-top:4px;font-weight:bold}
-.tl-tick{position:absolute;top:-6px;width:2px;height:17px;pointer-events:auto;cursor:pointer;z-index:2;transform:translateX(-50%)}
-.tl-tick::after{content:'';position:absolute;top:0;left:0;width:2px;height:17px;background:rgba(255,136,68,.35);border-radius:1px;transition:all .15s}
-.tl-tick:hover::after{background:#ff8844;width:3px;left:-0.5px}
-.tl-tip{display:none;position:absolute;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.92);border:1px solid rgba(255,136,68,.3);padding:3px 8px;border-radius:3px;font-size:8px;color:#ff9966;white-space:nowrap;pointer-events:none;line-height:1.4}
-.tl-tick:hover .tl-tip{display:block}
-.tl-tick.tl-impact::after{background:rgba(255,34,34,.6)}
-.tl-tick.tl-impact:hover::after{background:#ff2222}
+#transport{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+#transport button{background:#0a1119;border:1px solid #2c3a52;color:#dfe6f0;padding:6px 10px;font:bold 11px monospace;cursor:pointer;border-radius:3px;letter-spacing:2px}
+#transport button:hover{background:#1c3050;border-color:#4a90d8;color:#fff}
+#transport button.primary{background:#0a4;border-color:#0f8;color:#fff}
+#transport button.primary:hover{background:#0c6}
+#transport .time{color:#ffd24a;font-weight:bold;font-size:14px;letter-spacing:2px;margin-left:auto}
+#transport .speedwrap{display:flex;align-items:center;gap:4px;font-size:10px;color:#9bb4d4}
+#transport input[type=range]{width:100px}
 
-#p-events{position:absolute;left:14px;top:215px;font-size:10px;line-height:1.7;max-height:calc(100vh - 330px);overflow-y:auto;pointer-events:none;padding:8px 10px;min-width:250px}
-.ehdr{color:#ffb088;margin-bottom:4px;font-size:9px;letter-spacing:1px;font-weight:bold}
-.evt{padding:2px 8px;margin:1px 0;border-left:2px solid rgba(160,200,180,.6);color:#e0f0e4;transition:all .25s;font-weight:bold}
-.evt.active{border-left-color:#ff4444;color:#ffd4a8;background:rgba(255,68,68,.22);border-left-width:3px}
-.evt.passed{border-left-color:rgba(160,130,120,.6);color:#c0ccc4;opacity:.85;font-weight:normal}
+#planText{background:#0a1119;border:1px solid #2c3a52;padding:10px;border-radius:3px;font:10px 'Courier New',monospace;color:#aac8e8;line-height:1.5;white-space:pre;max-height:280px;overflow:auto}
 
-#event-banner{position:absolute;top:90px;left:50%;transform:translateX(-50%);background:rgba(40,0,0,.8);border:1px solid #ff4444;padding:8px 28px;border-radius:4px;text-align:center;font-size:13px;color:#ff8866;letter-spacing:1px;pointer-events:none;opacity:0;transition:opacity .35s;max-width:80vw;white-space:nowrap}
-#event-banner.visible{opacity:1}
-.esub{font-size:10px;color:#ffcdb0;margin-top:4px;font-weight:bold}
+#viewport{position:relative;background:#000}
+#viewport canvas{position:absolute;inset:0;width:100%;height:100%}
 
-#p-source{position:absolute;bottom:14px;left:14px;pointer-events:auto;padding:4px 10px;font-size:9px;max-width:380px}
-#src-toggle{color:#a8ffc8;text-decoration:underline;cursor:pointer;letter-spacing:.5px;font-weight:bold}
-#src-toggle:hover{color:#ffffff}
-#src-list{display:none;margin-top:6px;line-height:1.8;color:#dcf2e2;font-weight:bold}
-#src-list a{color:#a8d8ff;text-decoration:none;border-bottom:1px dotted rgba(168,216,255,.6)}
-#src-list a:hover{color:#ffffff}
-.src-note{color:#ffe4c8;font-style:italic;font-weight:normal}
+#statusBar{position:absolute;top:10px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.18);padding:8px 18px;border-radius:4px;text-align:center;pointer-events:none;text-shadow:1px 1px 0 #000}
+#statusBar .stage{font-size:14px;color:#fff;letter-spacing:3px;font-weight:bold}
+#statusBar .next{font-size:10px;color:#9bb4d4;margin-top:3px;letter-spacing:1px}
 
-.warning{color:#ff4444!important;animation:blink .5s infinite}
-@keyframes blink{50%{opacity:.3}}
+#timeline{position:absolute;left:14px;right:14px;bottom:14px;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.18);border-radius:4px;padding:8px 12px;pointer-events:auto}
+#tl-track{position:relative;height:8px;background:#1c2436;border-radius:4px;cursor:pointer}
+#tl-fill{position:absolute;left:0;top:0;height:100%;background:linear-gradient(90deg,#0c8,#ffd24a);border-radius:4px;width:0%}
+#tl-marker{position:absolute;top:-4px;width:4px;height:16px;background:#fff;transform:translateX(-50%);border-radius:2px}
+.tl-tick{position:absolute;top:0;height:100%;width:2px;background:rgba(255,255,255,.35)}
+.tl-tick:hover .tl-tip{opacity:1}
+.tl-tip{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.85);color:#fff;font-size:9px;padding:2px 6px;border-radius:2px;white-space:nowrap;opacity:0;pointer-events:none;letter-spacing:1px}
 
-/* Cockpit ACTIONS — event-driven floaters distributed around the screen.
-   No container backgrounds — each part lives in its own spatial location
-   matching its real cockpit position (AP at top, yokes at sides, fuel
-   at bottom-center pedestal). */
-#p-actions{position:absolute;inset:0;pointer-events:none;overflow:hidden}
-.act-card{position:absolute;display:none;text-align:center;pointer-events:none}
-.act-card.show{display:block;animation:cardFadeIn .4s ease}
-@keyframes cardFadeIn{from{opacity:0;transform:scale(.9) translate(var(--tx,0),var(--ty,0))}to{opacity:1;transform:scale(1) translate(var(--tx,0),var(--ty,0))}}
-.act-hdr{font-size:8.5px;color:rgba(255,170,80,.85);letter-spacing:1.2px;margin-bottom:2px;text-shadow:0 0 4px rgba(0,0,0,.95),0 0 2px rgba(0,0,0,1)}
-.act-status{font-size:9px;color:#ffe0b0;margin-top:4px;letter-spacing:.5px;font-weight:bold;text-shadow:0 0 5px rgba(0,0,0,.95),0 0 2px rgba(0,0,0,1)}
-.act-svg{display:block;margin:0 auto;filter:drop-shadow(0 0 4px rgba(0,0,0,.85))}
-/* Per-card placement — all schematic cards lifted clear of the bottom
-   controls/progress strip so buttons stay unobstructed. */
-#card-ap   {top:148px; left:50%; --tx:-50%; transform:translateX(-50%)}
-/* Control-surface bar — compact strip, just above the controls panel */
-#card-surf {bottom:170px; left:50%; --tx:-50%; transform:translateX(-50%)}
-/* Fuel + yokes — sit higher with breathing room above the surface bar */
-#card-fuel {bottom:260px; left:50%; --tx:-50%; transform:translateX(-50%)}
-#card-yoke-L{bottom:260px; left:22%;  --tx:-50%; transform:translateX(-50%)}
-#card-yoke-R{bottom:260px; right:22%; --tx:50%;  transform:translateX(50%)}
-#card-dual  {top:30%; left:50%; --tx:-50%; transform:translateX(-50%);font-family:'Courier New',monospace;font-size:13px;font-weight:bold;color:#ff3838;letter-spacing:2px;text-shadow:0 0 8px #ff0000,0 0 14px #ff0000,0 0 4px rgba(0,0,0,1);animation:pulseDual 1s ease-in-out infinite}
-@keyframes pulseDual{0%,100%{transform:translateX(-50%) scale(1);opacity:.85}50%{transform:translateX(-50%) scale(1.1);opacity:1}}
-/* Key-moment flashes */
-@keyframes flashRed{0%{filter:drop-shadow(0 0 0 transparent)}30%{filter:drop-shadow(0 0 18px #ff3333) drop-shadow(0 0 6px rgba(0,0,0,.85))}100%{filter:drop-shadow(0 0 4px rgba(0,0,0,.85))}}
-.flash-red{animation:flashRed .6s ease}
-@keyframes flashAmber{0%{filter:drop-shadow(0 0 0 transparent)}30%{filter:drop-shadow(0 0 14px #ffaa44) drop-shadow(0 0 4px rgba(0,0,0,.85))}100%{filter:drop-shadow(0 0 4px rgba(0,0,0,.85))}}
-.flash-amber{animation:flashAmber .6s ease}
-/* Step A — Fuel switch part palette (chunky mushroom-head lever, true 737 style) */
-.fsw-base{fill:#1a1a1a;stroke:#444;stroke-width:.6}
-.fsw-stem{fill:#888;stroke:#444;stroke-width:.4}
-.fsw-cap{fill:#0a0a0a;stroke:#555;stroke-width:.7}        /* chunky black knob */
-.fsw-cap-hi{fill:rgba(255,255,255,.18);stroke:none}         /* glossy highlight */
-.fsw-led{fill:#ff3333}
-.fsw-x line{stroke:#ff2222;stroke-width:1.5;stroke-linecap:round;filter:drop-shadow(0 0 1.5px #ff4444)}
-.fsw-x{opacity:0;transition:opacity .25s ease}
-.fsw-skirt-run{fill:#882222;stroke:#441010;stroke-width:.4}
-.fsw-skirt-active{fill:#ee5544;stroke:#882211;stroke-width:.6}
-.fsw-detent{stroke:#888;stroke-width:1.4;stroke-linecap:round}
-.fsw-lbl{fill:rgba(220,220,220,.85);font-size:5.5px;font-family:'Courier New',monospace;text-shadow:0 0 3px rgba(0,0,0,1)}
-.fsw-lbl-run{fill:#55cc66}
-.fsw-lbl-cutoff{fill:#ff5544}
-.fsw-lbl-eng{fill:#fff;font-size:7px;font-weight:bold;font-family:'Courier New',monospace}
-.fsw-hand{fill:none;stroke:#ffaa44;stroke-width:1.6;stroke-linecap:round;opacity:0;transition:opacity .25s}
-.fsw-hand.show{opacity:1}
-/* Step C — AP warning indicators */
-.ap-light{fill:rgba(40,40,40,.5);stroke:rgba(120,160,120,.6);stroke-width:.8;transition:fill .25s,stroke .25s}
-.ap-light.warn{fill:#ff2828;stroke:#aa0808;stroke-width:1.2;animation:blink .55s infinite}
-.ap-lbl{fill:#fff;font-size:7px;font-family:'Courier New',monospace;font-weight:bold}
-/* YOKE — Boeing 737-800 control yoke, photorealistic-ish front view:
-   Central tall rectangular HUB (column mount + badge plate),
-   two ergonomic curved arms swooping outward and slightly upward to
-   horizontal grip cylinders at the corners, integrated buttons.
-   Matte-black painted aluminium feel via SVG gradients.
-   Push = wheel translates DOWN; Pull = UP; Roll = rotate around hub. */
-/* Depth layers — back/shadow elements drawn first, foreground on top */
-.yk-column{fill:#0a0a0a;stroke:#222;stroke-width:.4}            /* column shaft visible behind hub */
-.yk-column-end{fill:#161616;stroke:#080808;stroke-width:.3}     /* shaft end ellipse */
-.yk-hub-back{fill:#0a0a0a;opacity:.85}                          /* back-shadow under hub */
-.yk-grip-back{fill:#070707;opacity:.85}                         /* back-shadow behind grips */
-.yk-arm{fill:none;stroke:url(#ykArmGrad);stroke-width:9;stroke-linecap:round}
-.yk-arm-shadow{fill:none;stroke:#000;stroke-width:10;stroke-linecap:round;opacity:.55}
-.yk-mount{fill:url(#ykMatteGrad);stroke:#0a0a0a;stroke-width:.7}
-.yk-badge{fill:#040404;stroke:#1a1a1a;stroke-width:.4}
-.yk-grip{fill:url(#ykGripGrad);stroke:#000;stroke-width:.6}     /* vertical cylinder body */
-.yk-grip-hi{fill:rgba(255,255,255,.18);stroke:none}             /* vertical highlight strip */
-.yk-grip-cap{fill:#1c1c1c;stroke:#000;stroke-width:.4}          /* top end cap of grip */
-.yk-grip-cap-hi{fill:rgba(255,255,255,.08);stroke:none}
-.yk-logo{fill:#3aa9d8;font-size:9px;font-family:'Arial Black',sans-serif;font-weight:bold;letter-spacing:0}
-.yk-logo-sub{fill:#3aa9d8;font-size:3.2px;font-family:'Arial',sans-serif;letter-spacing:.4px}
-.yk-btn-ap{fill:#e62020;stroke:#5a0606;stroke-width:.4}
-.yk-btn-ap-hi{fill:rgba(255,200,200,.5);stroke:none}
-.yk-btn-trim{fill:#777;stroke:#222;stroke-width:.3}
-.yk-btn-ptt{fill:#3a6da8;stroke:#112244;stroke-width:.3}
-.yk-active{filter:drop-shadow(0 0 5px rgba(255,140,80,.7))}
-.yk-active .yk-grip,.yk-active .yk-mount{stroke:#ff8844;stroke-width:1.3}
-.yk-lbl{fill:rgba(230,230,230,.92);font-size:6px;font-family:'Courier New',monospace;font-weight:bold}
-.yk-track{stroke:rgba(180,180,180,.4);stroke-width:.6;stroke-dasharray:2 2}
-.yk-neutral{stroke:rgba(160,255,180,.7);stroke-width:1.4;stroke-linecap:round}
-.kbd{display:inline-block;padding:1px 6px;background:rgba(0,0,0,.6);border:1px solid rgba(0,255,136,.6);border-radius:3px;color:#cdf2d6;font:bold 9px 'Courier New',monospace;margin:0 2px;text-shadow:none}
-/* ADS-B point labels — HTML vector text (always crisp, no backdrop, soft shadow) */
-.ads-label{position:absolute;left:0;top:0;pointer-events:none;text-align:center;white-space:nowrap;font-family:'Courier New',monospace;line-height:1.15;will-change:transform;transition:opacity .15s}
-.ads-label .ads-alt{font-size:12px;color:#ffe6b0;font-weight:bold;text-shadow:0 1px 1px rgba(0,0,0,.5),0 0 2px rgba(0,0,0,.55)}
-.ads-label .ads-spd{font-size:10px;color:#cdf2d6;font-weight:bold;text-shadow:0 1px 1px rgba(0,0,0,.5),0 0 2px rgba(0,0,0,.55)}
-.ads-label .ads-vs {font-size:9px;font-weight:bold;text-shadow:0 1px 1px rgba(0,0,0,.5),0 0 2px rgba(0,0,0,.55)}
-/* Control-surface deflection bars */
-.surf-hdr{fill:#ffb088;font-size:8px;font-family:'Courier New',monospace;font-weight:bold;letter-spacing:.8px}
-.surf-lbl{fill:#cdf2d6;font-size:7px;font-family:'Courier New',monospace;font-weight:bold}
-.surf-val{fill:#ffe0b0;font-size:7px;font-family:'Courier New',monospace;font-weight:bold}
-.surf-val-grey{fill:#888;font-size:6.5px;font-family:'Courier New',monospace}
-.surf-bar-bg{fill:rgba(40,40,40,.5);stroke:rgba(180,180,180,.45);stroke-width:.4}
-.surf-bar-bg-grey{fill:rgba(40,40,40,.3);stroke:rgba(120,120,120,.3);stroke-width:.4}
-.surf-zero{stroke:#88ff88;stroke-width:1}
-.surf-zero-grey{stroke:#666;stroke-width:.7}
-.surf-bar{transition:width .25s,x .25s,fill .25s}
-.surf-bar.up{fill:#33aaff}        /* trailing edge up = positive */
-.surf-bar.dn{fill:#ff5544}        /* trailing edge down = negative */
-.surf-bar.flash{animation:blink .35s infinite}
-.surf-stat{fill:#ffd4a8;font-size:7.5px;font-family:'Courier New',monospace;font-weight:bold}
-.surf-cause{fill:#ff8866;font-size:6.5px;font-family:'Courier New',monospace;font-weight:bold;transition:opacity .25s}
-/* Per-pilot force arrows (independent of mechanical position) */
-.yk-force{fill:none;stroke-width:2;stroke-linecap:round;opacity:0;transition:opacity .3s,stroke .3s}
-.yk-force.show{opacity:.95}
-.yk-force.cap{stroke:#22ddff}        /* Captain — cyan */
-.yk-force.fo {stroke:#ffdd33}        /* F/O — yellow */
-.yk-force-tip{fill:currentColor;opacity:0;transition:opacity .3s}
-.yk-force-tip.show{opacity:.95}
-.yk-pitch-force{fill:none;stroke-width:2;stroke-linecap:round;opacity:0;transition:opacity .3s,stroke .3s}
-.yk-pitch-force.show{opacity:.95}
-.yk-pitch-force.cap{stroke:#22ddff}
-.yk-pitch-force.fo {stroke:#ffdd33}
+#legend{position:absolute;top:10px;right:10px;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.18);padding:8px 12px;border-radius:4px;font-size:10px;line-height:1.7;text-shadow:1px 1px 0 #000;letter-spacing:1px}
+#legend .row{display:flex;align-items:center;gap:6px}
+#legend .sw{width:14px;height:3px;background:#fff;border-radius:1px}
 
-#loading{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#668;font-size:13px;text-align:center}
+#camMenu{position:absolute;top:10px;left:10px;display:flex;gap:4px}
+#camMenu button{background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.2);color:#dfe6f0;padding:5px 10px;font:bold 10px monospace;cursor:pointer;border-radius:3px;letter-spacing:1px}
+#camMenu button.active{background:rgba(255,170,0,.4);border-color:#ffaa00;color:#fff}
 
-@media(max-width:768px){
-  #p-title{padding:4px 10px;top:4px}
-  #p-title .main{font-size:11px;letter-spacing:1px}
-  #p-title .sub{font-size:8px}
-  #p-title .src-tag{font-size:8px;letter-spacing:.5px;margin-top:2px}
-  #p-title .warn-line{display:none}
-  #p-title>div:last-child{display:none}
+#tlticks{position:absolute;left:0;right:0;top:0;bottom:0;pointer-events:none}
+#tl-track .tl-tick{pointer-events:auto;cursor:default}
 
-  /* p-flight: compact horizontal strip below title (full-width row) */
-  #p-flight{top:54px;left:6px;right:6px;padding:3px 8px;min-width:auto;line-height:1.3;font-size:10px;
-            display:flex;flex-direction:row;flex-wrap:wrap;column-gap:14px;row-gap:2px;align-items:baseline}
-  #p-flight>div{display:inline-flex;align-items:baseline;gap:3px}
-  #phase-label{font-size:11px;margin:0;padding-right:4px}
-  .lbl{width:auto;font-size:9px}
-  /* HDG / PITCH / BANK hidden on phone — derivable visually from aircraft */
-  #p-flight>div:nth-child(4),
-  #p-flight>div:nth-child(6),
-  #p-flight>div:nth-child(7){display:none}
+.scroll{scrollbar-width:thin;scrollbar-color:#2c3a52 transparent}
+.scroll::-webkit-scrollbar{width:6px;height:6px}
+.scroll::-webkit-scrollbar-thumb{background:#2c3a52;border-radius:3px}
 
-  #p-info{display:none}
-  #p-alt{display:none}
-  #p-events{display:none}
-  #p-source{display:none}
-  .m-hide{display:none}
-
-  /* Event banner: below p-flight (which ends ~80px), narrower */
-  #event-banner{top:88px;font-size:10px;padding:4px 12px;max-width:84vw}
-
-  /* Cockpit-action cards: top stack (AP only — surf hidden), bottom row (yokes + fuel).
-     Surface bar removed from mobile to keep the aircraft view tall enough. */
-  #card-ap   {top:128px}
-  #card-ap svg {width:120px;height:38px}
-  #card-surf {display:none}
-  /* Yokes pinned to screen edges (absolute px) so the bottom row stays
-     uncramped even on 320 px phones; fuel centred between them. */
-  #card-yoke-L{bottom:114px;left:8px;--tx:0;transform:none}
-  #card-yoke-R{bottom:114px;right:8px;--tx:0;transform:none}
-  #card-yoke-L svg,#card-yoke-R svg{width:78px;height:102px}
-  #card-yoke-L .act-hdr,#card-yoke-R .act-hdr{font-size:7.5px;margin-bottom:1px}
-  #card-yoke-L .act-status,#card-yoke-R .act-status{font-size:8px;margin-top:2px}
-  #card-fuel {bottom:118px;left:50%;--tx:-50%;transform:translateX(-50%)}
-  #card-fuel svg {width:122px;height:68px}
-  #card-fuel .act-hdr{font-size:7.5px;margin-bottom:1px}
-  #card-fuel .act-status{font-size:8px;margin-top:2px}
-  #card-dual {top:26%;font-size:11px;letter-spacing:1px}
-
-  #p-controls{padding:6px 8px;bottom:4px}
-  .btn{padding:3px 7px;font-size:9px}
-  .btn-row{gap:3px;margin-bottom:4px}
-  .sep{margin:0 1px}
-  #timeline{width:88vw;height:6px}
-  #timeline-marker{width:14px;height:14px;top:-5px}
-  #time-text{font-size:9px}
-}
+#announce{position:absolute;left:50%;top:32%;transform:translate(-50%,-50%);text-align:center;opacity:0;transition:opacity .25s;pointer-events:none;text-shadow:0 0 14px rgba(0,0,0,.9),2px 2px 0 #000}
+#announce.show{opacity:1}
+#announce .name{font-size:32px;font-weight:bold;color:#ffd24a;letter-spacing:5px}
+#announce .sub{font-size:14px;color:#fff;margin-top:6px;letter-spacing:3px}
 </style>
 </head>
 <body>
-<canvas id="canvas"></canvas>
-<div id="loading">Loading satellite imagery &amp; aircraft model...</div>
-<div id="hud" style="display:none">
-  <!-- Shared SVG gradient defs (yoke matte-black aluminium look) -->
-  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
-    <defs>
-      <linearGradient id="ykMatteGrad" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="#2c2c2c"/>
-        <stop offset="45%" stop-color="#181818"/>
-        <stop offset="100%" stop-color="#070707"/>
-      </linearGradient>
-      <linearGradient id="ykArmGrad" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="#2a2a2a"/>
-        <stop offset="100%" stop-color="#080808"/>
-      </linearGradient>
-      <linearGradient id="ykGripGrad" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="#2e2e2e"/>
-        <stop offset="55%" stop-color="#0d0d0d"/>
-        <stop offset="100%" stop-color="#000"/>
-      </linearGradient>
-    </defs>
-  </svg>
-  <div id="p-title" class="panel">
-    <div class="warn-line">TRAJECTORY: ADS-B MEASURED 航迹实测 &ensp;|&ensp; ATTITUDE: ESTIMATED 姿态估算 &ensp;|&ensp; FDR: PARTIAL 部分披露</div>
-    <div class="main">CHINA EASTERN AIRLINES FLIGHT MU5735</div>
-    <div class="sub">B-1791 &bull; Boeing 737-89P &bull; 2022-03-21 &bull; KMG → CAN</div>
-    <div class="src-tag">OPEN SOURCE DATA ONLY &middot; 仅使用公开数据</div>
-  </div>
-  <div id="p-flight" class="panel">
-    <div id="phase-label">CRUISE</div>
-    <div><span class="lbl">ALT</span><span class="val" id="v-alt">29100</span> ft</div>
-    <div><span class="lbl">GS</span><span class="val" id="v-spd">457</span> kts</div>
-    <div><span class="lbl">HDG</span><span class="val" id="v-hdg">100</span>&deg;</div>
-    <div><span class="lbl">V/S</span><span class="val" id="v-vs">0</span> ft/min</div>
-    <div><span class="lbl">PITCH</span><span class="val" id="v-pitch">0.0</span>&deg;<span class="derived">est估</span></div>
-    <div><span class="lbl">BANK</span><span class="val" id="v-bank">0.0</span>&deg;<span class="derived">est估</span></div>
-  </div>
-  <div id="p-info" class="panel">
-    <div><span class="lbl">UTC</span><span class="val" id="v-utc">06:20:43</span></div>
-    <div><span class="lbl">CST</span><span class="val" id="v-cst">14:20:43</span></div>
-    <div><span class="lbl">LAT</span><span class="val" id="v-lat">23.3487</span>&deg;N</div>
-    <div><span class="lbl">LON</span><span class="val" id="v-lon">110.8508</span>&deg;E</div>
-    <div><span class="lbl">G</span><span class="val" id="v-gload">1.0</span><span class="derived">est估</span></div>
-  </div>
-  <div id="p-alt" class="panel"><div id="alt-num">ALT</div><div id="alt-bar" style="height:100%"></div></div>
-  <div id="p-controls" class="panel">
-    <div class="btn-row">
-      <button class="btn" id="btn-playpause" title="Space: Play / Pause">&#9654; Play 播放</button>
-      <div class="sep"></div>
-      <!-- Speed selector: main button shows current speed; hover expands menu -->
-      <div class="btn-speed-wrap">
-        <button class="btn" id="btn-speed" title="Hover for speeds 悬停选择倍速">2&times;</button>
-        <div class="speed-menu">
-          <button class="btn speed-opt" data-spd="1">1&times;</button>
-          <button class="btn speed-opt active" data-spd="2">2&times;</button>
-          <button class="btn speed-opt" data-spd="5">5&times;</button>
-          <button class="btn speed-opt" data-spd="10">10&times;</button>
-        </div>
+<div id="app">
+  <aside id="planner" class="scroll">
+    <h1>飞行表演规划系统</h1>
+    <h2>AIR SHOW PLANNER · v1.0</h2>
+
+    <section>
+      <h3>1 · 总体设置 / SETUP</h3>
+      <div class="field"><label>编队架数 / Team</label>
+        <input type="number" id="teamSize" min="3" max="9" value="6"></div>
+      <div class="field"><label>初始编队 / Initial</label>
+        <select id="initFormation">
+          <option value="TRAIL">TRAIL · 鱼贯</option>
+          <option value="V">V · V字</option>
+          <option value="ECHELON_R">ECHELON_R · 右梯队</option>
+          <option value="LINE">LINE · 横排</option>
+          <option value="DIAMOND">DIAMOND · 菱形</option>
+        </select></div>
+      <div class="field"><label>表演高度 / Alt</label>
+        <div class="row"><input id="altMin" type="number" value="150"><span class="unit">~</span><input id="altMax" type="number" value="500"><span class="unit">m</span></div></div>
+      <div class="field"><label>巡航速度 / Speed</label>
+        <div class="row"><input id="spdMin" type="number" value="80"><span class="unit">~</span><input id="spdMax" type="number" value="140"><span class="unit">m/s</span></div></div>
+      <div class="field"><label>起飞时间 / T0</label>
+        <input id="takeoffTime" type="number" value="0"><span class="unit">s</span></div>
+    </section>
+
+    <section>
+      <h3>2 · 动作模块序列 / MODULES</h3>
+      <div id="moduleList" class="scroll"></div>
+      <div style="font-size:10px;color:#7a90b0;margin-bottom:6px;letter-spacing:1px">添加模块 · ADD</div>
+      <div class="add-row">
+        <button data-add="CRUISE">CRUISE 巡航</button>
+        <button data-add="FORMATION_CHANGE">编队变换</button>
+        <button data-add="LOOP">LOOP 筋斗</button>
+        <button data-add="BARREL_ROLL">BARREL ROLL 横滚</button>
+        <button data-add="BOMB_BURST">BOMB BURST 爆破</button>
+        <button data-add="MIRROR_PASS">MIRROR PASS 对穿</button>
+        <button data-add="LOW_PASS">LOW PASS 低空</button>
+        <button data-add="HIGH_PASS">HIGH PASS 高空</button>
       </div>
-      <div class="sep"></div>
-      <!-- Next event: skip to next event in timeline, then PAUSE there -->
-      <button class="btn" id="btn-next-evt" title="Skip to next event 跳到下一事件并暂停">&#9654;&#10073; Next 下一事件</button>
-    </div>
-    <div class="btn-row" id="cam-row">
-      <button class="btn cam-btn" id="cam-free">Free</button>
-      <button class="btn cam-btn active" id="cam-tail">Tail</button>
-      <button class="btn cam-btn" id="cam-left">L</button>
-      <button class="btn cam-btn" id="cam-right">R</button>
-      <button class="btn cam-btn" id="cam-top">Top</button>
-    </div>
-    <div id="timeline"><div id="timeline-fill"></div><div id="timeline-marker"></div></div>
-    <div id="time-text"><span id="v-elapsed">00:00.000</span> / <span id="v-total">--:--</span> &ensp;|&ensp; <span style="color:#a8d4a8">CST 北京</span> <span class="val" id="v-cst-tl" style="color:#ffffff;font-weight:bold">14:20:38.000</span><span class="m-hide"> &ensp;|&ensp; <kbd class="kbd">Space</kbd> Play/Pause 播放/暂停 &ensp; Drag 拖动: Orbit 旋转 &ensp; Scroll 滚轮: Zoom 缩放</span></div>
-  </div>
-  <div id="p-events" class="panel">
-    <div class="ehdr">FDR / ADS-B EVENTS 事件时间线</div>
-    <div class="evt" data-t="268">14:20:38 Engine fuel CUTOFF 燃油切断</div>
-    <div class="evt" data-t="271">14:20:41 AP OFF + left roll begins 自驾断开+开始左滚</div>
-    <div class="evt" data-t="274">14:20:44 Last stable FL291 最后稳定</div>
-    <div class="evt" data-t="275">14:20:45 Roll -90° 左翼下沉90°</div>
-    <div class="evt" data-t="279">14:20:49 Inverted 倒扣 (-180°)</div>
-    <div class="evt" data-t="288">14:20:58 Roll -270° 右翼下沉90°</div>
-    <div class="evt" data-t="290">14:21:00 Descent 27,025 ft 开始下降</div>
-    <div class="evt" data-t="291">14:21:01 FDR stops ~26k ft FDR断电</div>
-    <div class="evt" data-t="305">14:21:15 Dive steepens 17,325 ft 俯冲加剧</div>
-    <div class="evt" data-t="336">14:21:46 1st dive bottom 7,850 ft 首次触底</div>
-    <div class="evt" data-t="346">14:21:56 Recovery 拉起 +3,520 ft/min</div>
-    <div class="evt" data-t="355">14:22:05 Peak recovery 8,600 ft 拉起峰值</div>
-    <div class="evt" data-t="372">14:22:22 2nd dive begins 二次俯冲</div>
-    <div class="evt" data-t="386">14:22:36 Last ADS-B 3,225 ft 最后信号</div>
-    <div class="evt" data-t="388.5">14:22:38 IMPACT 撞击</div>
-  </div>
-  <div id="p-actions">
-    <!-- AP WARNING — top-center (glareshield position, 2 indicators) -->
-    <div class="act-card" id="card-ap">
-      <svg class="act-svg" width="140" height="44" viewBox="0 0 140 44" xmlns="http://www.w3.org/2000/svg">
-        <rect class="ap-light" id="ap-light-1" x="6" y="6" width="56" height="28" rx="3"/>
-        <text x="34" y="22" text-anchor="middle" class="ap-lbl">AP1</text>
-        <text x="34" y="32" text-anchor="middle" class="ap-lbl" style="font-size:5.5px">WARN</text>
-        <rect class="ap-light" id="ap-light-2" x="78" y="6" width="56" height="28" rx="3"/>
-        <text x="106" y="22" text-anchor="middle" class="ap-lbl">AP2</text>
-        <text x="106" y="32" text-anchor="middle" class="ap-lbl" style="font-size:5.5px">WARN</text>
-      </svg>
-      <div class="act-status" id="ap-status">AP ENGAGED</div>
-    </div>
+    </section>
 
-    <!-- DUAL INPUT badge — center floater, only when both pilots applying force -->
-    <div class="act-card" id="card-dual">★ DUAL INPUT &middot; 双重输入 ★</div>
-
-    <!-- CONTROL SURFACES — aileron/elevator/rudder deflection bars -->
-    <div class="act-card" id="card-surf">
-      <svg class="act-svg" width="280" height="86" viewBox="0 0 280 86" xmlns="http://www.w3.org/2000/svg">
-        <text x="140" y="10" text-anchor="middle" class="surf-hdr">CONTROL SURFACES &middot; 操纵面</text>
-        <!-- Aileron L bar -->
-        <text x="6" y="30" class="surf-lbl">AIL L</text>
-        <rect class="surf-bar-bg" x="38" y="24" width="80" height="8" rx="1"/>
-        <line class="surf-zero" x1="78" y1="22" x2="78" y2="34"/>
-        <rect id="surf-ail-L" class="surf-bar up" x="78" y="25" width="0" height="6"/>
-        <text id="surf-ail-L-val" x="125" y="30" class="surf-val">0°</text>
-        <!-- Aileron R bar -->
-        <text x="6" y="46" class="surf-lbl">AIL R</text>
-        <rect class="surf-bar-bg" x="38" y="40" width="80" height="8" rx="1"/>
-        <line class="surf-zero" x1="78" y1="38" x2="78" y2="50"/>
-        <rect id="surf-ail-R" class="surf-bar dn" x="78" y="41" width="0" height="6"/>
-        <text id="surf-ail-R-val" x="125" y="46" class="surf-val">0°</text>
-        <!-- Elevator bar -->
-        <text x="155" y="30" class="surf-lbl">ELEV</text>
-        <rect class="surf-bar-bg" x="190" y="24" width="60" height="8" rx="1"/>
-        <line class="surf-zero" x1="220" y1="22" x2="220" y2="34"/>
-        <rect id="surf-elev" class="surf-bar dn" x="220" y="25" width="0" height="6"/>
-        <text id="surf-elev-val" x="258" y="30" class="surf-val">0°</text>
-        <!-- Inferred-cause callout: appears when elevator goes extreme down at T+18+ -->
-        <text id="surf-elev-cause" x="220" y="20" text-anchor="middle" class="surf-cause" style="opacity:0">← 推杆 PUSH ↓</text>
-        <!-- Rudder bar (always 0, greyed — key evidence) -->
-        <text x="155" y="46" class="surf-lbl" style="fill:#888">RUD</text>
-        <rect class="surf-bar-bg-grey" x="190" y="40" width="60" height="8" rx="1"/>
-        <line class="surf-zero-grey" x1="220" y1="38" x2="220" y2="50"/>
-        <text x="258" y="46" class="surf-val-grey">0° UNTOUCHED</text>
-        <text x="155" y="55" class="surf-val-grey" style="font-size:5.5px">方向舵全程未动</text>
-        <!-- Status -->
-        <text id="surf-status" x="140" y="76" text-anchor="middle" class="surf-stat">—</text>
-      </svg>
-    </div>
-
-    <!-- FUEL CUTOFF SWITCH — bottom-center (pedestal position) -->
-    <div class="act-card" id="card-fuel">
-      <div class="act-hdr">FUEL CUTOFF &middot; 燃油切断</div>
-      <svg class="act-svg" width="200" height="110" viewBox="0 0 200 110" xmlns="http://www.w3.org/2000/svg">
-        <!-- Side-elevation: lever pivots at base. RUN = angled up-forward (~-25°),
-             CUTOFF = angled down-forward (~155°). Mushroom-head knob (cap+stem). -->
-        <!-- Switch 1 — ENG 1.  RUN = lever at upper-RIGHT (+20°),
-             CUTOFF = lever at lower-LEFT (+200°). Pilot lifts the cap up-right,
-             rotates clockwise through ~180°, and seats it into lower-left. -->
-        <g id="fsw-1" transform="translate(60,80)">
-          <text class="fsw-lbl-eng" x="0" y="-50" text-anchor="middle">ENG 1</text>
-          <text class="fsw-lbl fsw-lbl-run"    x="20" y="-22" text-anchor="middle">RUN</text>
-          <text class="fsw-lbl fsw-lbl-cutoff" x="22" y="22"  text-anchor="middle">CUTOFF</text>
-          <line class="fsw-detent" x1="6" y1="-2" x2="14" y2="2"/>
-          <rect class="fsw-base" x="-7" y="-3" width="14" height="9" rx="1"/>
-          <g id="fsw-1-tog" transform="rotate(60)">
-            <!-- Stem grows when lever is "pulled out" (extension phase) -->
-            <rect id="fsw-1-stem" class="fsw-stem" x="-1.6" y="-15" width="3.2" height="15" rx=".7"/>
-            <!-- Head group: translates UP during extension to match stem growth -->
-            <g id="fsw-1-head" transform="translate(0,0)">
-              <ellipse class="fsw-cap" cx="0" cy="-19" rx="6.5" ry="5.5"/>
-              <ellipse class="fsw-cap-hi" cx="0" cy="-22.5" rx="3" ry="1.2"/>
-              <circle class="fsw-led" cx="0" cy="-22.5" r=".9"/>
-              <g id="fsw-1-x" class="fsw-x">
-                <line x1="-3.2" y1="-22" x2="3.2" y2="-16"/>
-                <line x1="3.2" y1="-22" x2="-3.2" y2="-16"/>
-              </g>
-            </g>
-          </g>
-          <!-- Skirt collar around the base (lifts vertically when actuating) -->
-          <g id="fsw-1-skirt" transform="translate(0,0)">
-            <ellipse class="fsw-skirt-run" cx="0" cy="-2" rx="9" ry="2.5"/>
-            <rect class="fsw-skirt-run" x="-9" y="-2" width="18" height="4"/>
-          </g>
-          <!-- Hand-lift hint arrow (T-1..T+0 only) -->
-          <g class="fsw-hand" id="fsw-1-hand">
-            <path d="M 20 -24 L 20 -8 M 16 -12 L 20 -8 L 24 -12"/>
-            <text x="27" y="-14" class="fsw-lbl" style="fill:#ffaa44">LIFT</text>
-          </g>
-        </g>
-        <!-- Switch 2 — ENG 2 (same RUN ↗ → ↙ CUTOFF motion) -->
-        <g id="fsw-2" transform="translate(140,80)">
-          <text class="fsw-lbl-eng" x="0" y="-50" text-anchor="middle">ENG 2</text>
-          <text class="fsw-lbl fsw-lbl-run"    x="20" y="-22" text-anchor="middle">RUN</text>
-          <text class="fsw-lbl fsw-lbl-cutoff" x="22" y="22"  text-anchor="middle">CUTOFF</text>
-          <line class="fsw-detent" x1="6" y1="-2" x2="14" y2="2"/>
-          <rect class="fsw-base" x="-7" y="-3" width="14" height="9" rx="1"/>
-          <g id="fsw-2-tog" transform="rotate(60)">
-            <rect id="fsw-2-stem" class="fsw-stem" x="-1.6" y="-15" width="3.2" height="15" rx=".7"/>
-            <g id="fsw-2-head" transform="translate(0,0)">
-              <ellipse class="fsw-cap" cx="0" cy="-19" rx="6.5" ry="5.5"/>
-              <ellipse class="fsw-cap-hi" cx="0" cy="-22.5" rx="3" ry="1.2"/>
-              <circle class="fsw-led" cx="0" cy="-22.5" r=".9"/>
-              <g id="fsw-2-x" class="fsw-x">
-                <line x1="-3.2" y1="-22" x2="3.2" y2="-16"/>
-                <line x1="3.2" y1="-22" x2="-3.2" y2="-16"/>
-              </g>
-            </g>
-          </g>
-          <g id="fsw-2-skirt" transform="translate(0,0)">
-            <ellipse class="fsw-skirt-run" cx="0" cy="-2" rx="9" ry="2.5"/>
-            <rect class="fsw-skirt-run" x="-9" y="-2" width="18" height="4"/>
-          </g>
-          <g class="fsw-hand" id="fsw-2-hand">
-            <path d="M 20 -24 L 20 -8 M 16 -12 L 20 -8 L 24 -12"/>
-            <text x="27" y="-14" class="fsw-lbl" style="fill:#ffaa44">LIFT</text>
-          </g>
-        </g>
-      </svg>
-      <div class="act-status" id="fsw-status">RUN · LOCKED</div>
-    </div>
-
-    <!-- CTRL WHEEL · CAPTAIN — mid-left -->
-    <div class="act-card" id="card-yoke-L">
-      <div class="act-hdr">YOKE &middot; CAPT 左</div>
-      <svg class="act-svg" width="160" height="160" viewBox="0 0 160 160" xmlns="http://www.w3.org/2000/svg">
-        <!-- Vertical guide track + neutral-position marker (rest position) -->
-        <line class="yk-track" x1="80" y1="20" x2="80" y2="140"/>
-        <line class="yk-neutral" x1="68" y1="80" x2="92" y2="80"/>
-        <text x="98" y="83" class="yk-lbl" style="font-size:5px;fill:rgba(180,200,180,.7)">NEUTRAL</text>
-        <!-- Tilt group: vertical translate represents push (+y) / pull (-y) -->
-        <g id="yoke-L-tilt" transform="translate(0,0)">
-          <!-- Yoke (rotates for roll around its hub centre) -->
-          <g id="yoke-L-rot" transform="translate(80,80) rotate(0)">
-            <!-- Layer 1 (deepest BACK): column shaft mounting visible behind hub -->
-            <rect class="yk-column" x="-7" y="6" width="14" height="22" rx="2"/>
-            <ellipse class="yk-column-end" cx="0" cy="28" rx="7" ry="2.4"/>
-            <!-- Layer 2: hub back-shadow (wider, darker, behind front face) -->
-            <rect class="yk-hub-back" x="-13" y="-18" width="26" height="36" rx="4"/>
-            <!-- Layer 3: arms (back shadow first, then bright stroke on top) -->
-            <path class="yk-arm-shadow" d="M -11 -2 Q -22 6 -34 -4 Q -40 -10 -40 -16"/>
-            <path class="yk-arm-shadow" d="M  11 -2 Q  22 6  34 -4 Q  40 -10  40 -16"/>
-            <path class="yk-arm" d="M -11 -2 Q -22 6 -34 -4 Q -40 -10 -40 -16"/>
-            <path class="yk-arm" d="M  11 -2 Q  22 6  34 -4 Q  40 -10  40 -16"/>
-            <!-- Layer 4: grip back-shadow (depth — grips sit forward/right of hub) -->
-            <rect class="yk-grip-back" x="-43" y="-26" width="9" height="22" rx="3.5"/>
-            <rect class="yk-grip-back" x="34" y="-26" width="9" height="22" rx="3.5"/>
-            <!-- Layer 5: VERTICAL grip cylinders (tall handles pilots actually grasp) -->
-            <rect class="yk-grip" x="-44" y="-28" width="9" height="22" rx="3.5"/>
-            <rect class="yk-grip-hi" x="-43" y="-26" width="2" height="18" rx="1"/>
-            <ellipse class="yk-grip-cap" cx="-39.5" cy="-28" rx="4.5" ry="1.6"/>
-            <ellipse class="yk-grip-cap-hi" cx="-40" cy="-28.5" rx="2.5" ry=".5"/>
-            <rect class="yk-grip" x="35" y="-28" width="9" height="22" rx="3.5"/>
-            <rect class="yk-grip-hi" x="36" y="-26" width="2" height="18" rx="1"/>
-            <ellipse class="yk-grip-cap" cx="39.5" cy="-28" rx="4.5" ry="1.6"/>
-            <ellipse class="yk-grip-cap-hi" cx="40" cy="-28.5" rx="2.5" ry=".5"/>
-            <!-- Layer 6: chunky front HUB face + recessed badge plate -->
-            <rect class="yk-mount" x="-11" y="-16" width="22" height="32" rx="3.5"/>
-            <rect class="yk-badge" x="-9" y="-13" width="18" height="22" rx="2"/>
-            <text class="yk-logo" x="0" y="-2" text-anchor="middle">Q</text>
-            <text class="yk-logo-sub" x="0" y="6" text-anchor="middle">B737</text>
-            <!-- Layer 7: grip controls (foreground buttons) -->
-            <!--  red AP disconnect — top-front of grip, thumb position -->
-            <circle class="yk-btn-ap" cx="-39.5" cy="-21" r="2"/>
-            <circle class="yk-btn-ap-hi" cx="-40" cy="-21.5" r=".7"/>
-            <circle class="yk-btn-ap" cx="39.5" cy="-21" r="2"/>
-            <circle class="yk-btn-ap-hi" cx="39" cy="-21.5" r=".7"/>
-            <!--  trim switch — outer side, mid-grip -->
-            <rect class="yk-btn-trim" x="-44" y="-15" width="2.5" height="6" rx=".5"/>
-            <rect class="yk-btn-trim" x="41.5" y="-15" width="2.5" height="6" rx=".5"/>
-            <!--  PTT — lower-inner side -->
-            <rect class="yk-btn-ptt" x="-37" y="-10" width="2" height="3" rx=".3"/>
-            <rect class="yk-btn-ptt" x="35" y="-10" width="2" height="3" rx=".3"/>
-          </g>
-        </g>
-        <!-- Captain force arrows (cyan) — translate with wheel via tilt group -->
-        <path id="yk-L-roll-arc" class="yk-force cap" d="M 110 60 Q 80 35 50 60"/>
-        <polygon id="yk-L-roll-tip" class="yk-force-tip" style="color:#22ddff" points="50,60 56,54 58,64"/>
-        <line id="yk-L-pitch-arc" class="yk-pitch-force cap" x1="130" y1="65" x2="130" y2="100"/>
-        <polygon id="yk-L-pitch-tip" class="yk-force-tip" style="color:#22ddff" points="130,100 125,93 135,93"/>
-        <!-- Push displacement readout (px) — emphasises distance from neutral -->
-        <text x="80" y="155" text-anchor="middle" class="yk-lbl" style="font-size:6.5px;fill:#22ddff">CAPT 机长</text>
-      </svg>
-      <div class="act-status" id="yk-L-status" style="font-size:9px;color:#22ddff">—</div>
-    </div>
-
-    <!-- CTRL YOKE · F/O — pilot POV mirror -->
-    <div class="act-card" id="card-yoke-R">
-      <div class="act-hdr">YOKE &middot; F/O 副驾</div>
-      <svg class="act-svg" width="160" height="160" viewBox="0 0 160 160" xmlns="http://www.w3.org/2000/svg">
-        <line class="yk-track" x1="80" y1="20" x2="80" y2="140"/>
-        <line class="yk-neutral" x1="68" y1="80" x2="92" y2="80"/>
-        <text x="98" y="83" class="yk-lbl" style="font-size:5px;fill:rgba(180,200,180,.7)">NEUTRAL</text>
-        <g id="yoke-R-tilt" transform="translate(0,0)">
-          <g id="yoke-R-rot" transform="translate(80,80) rotate(0)">
-            <rect class="yk-column" x="-7" y="6" width="14" height="22" rx="2"/>
-            <ellipse class="yk-column-end" cx="0" cy="28" rx="7" ry="2.4"/>
-            <rect class="yk-hub-back" x="-13" y="-18" width="26" height="36" rx="4"/>
-            <path class="yk-arm-shadow" d="M -11 -2 Q -22 6 -34 -4 Q -40 -10 -40 -16"/>
-            <path class="yk-arm-shadow" d="M  11 -2 Q  22 6  34 -4 Q  40 -10  40 -16"/>
-            <path class="yk-arm" d="M -11 -2 Q -22 6 -34 -4 Q -40 -10 -40 -16"/>
-            <path class="yk-arm" d="M  11 -2 Q  22 6  34 -4 Q  40 -10  40 -16"/>
-            <rect class="yk-grip-back" x="-43" y="-26" width="9" height="22" rx="3.5"/>
-            <rect class="yk-grip-back" x="34" y="-26" width="9" height="22" rx="3.5"/>
-            <rect class="yk-grip" x="-44" y="-28" width="9" height="22" rx="3.5"/>
-            <rect class="yk-grip-hi" x="-43" y="-26" width="2" height="18" rx="1"/>
-            <ellipse class="yk-grip-cap" cx="-39.5" cy="-28" rx="4.5" ry="1.6"/>
-            <ellipse class="yk-grip-cap-hi" cx="-40" cy="-28.5" rx="2.5" ry=".5"/>
-            <rect class="yk-grip" x="35" y="-28" width="9" height="22" rx="3.5"/>
-            <rect class="yk-grip-hi" x="36" y="-26" width="2" height="18" rx="1"/>
-            <ellipse class="yk-grip-cap" cx="39.5" cy="-28" rx="4.5" ry="1.6"/>
-            <ellipse class="yk-grip-cap-hi" cx="40" cy="-28.5" rx="2.5" ry=".5"/>
-            <rect class="yk-mount" x="-11" y="-16" width="22" height="32" rx="3.5"/>
-            <rect class="yk-badge" x="-9" y="-13" width="18" height="22" rx="2"/>
-            <text class="yk-logo" x="0" y="-2" text-anchor="middle">Q</text>
-            <text class="yk-logo-sub" x="0" y="6" text-anchor="middle">B737</text>
-            <circle class="yk-btn-ap" cx="-39.5" cy="-21" r="2"/>
-            <circle class="yk-btn-ap-hi" cx="-40" cy="-21.5" r=".7"/>
-            <circle class="yk-btn-ap" cx="39.5" cy="-21" r="2"/>
-            <circle class="yk-btn-ap-hi" cx="39" cy="-21.5" r=".7"/>
-            <rect class="yk-btn-trim" x="-44" y="-15" width="2.5" height="6" rx=".5"/>
-            <rect class="yk-btn-trim" x="41.5" y="-15" width="2.5" height="6" rx=".5"/>
-            <rect class="yk-btn-ptt" x="-37" y="-10" width="2" height="3" rx=".3"/>
-            <rect class="yk-btn-ptt" x="35" y="-10" width="2" height="3" rx=".3"/>
-          </g>
-        </g>
-        <path id="yk-R-roll-arc" class="yk-force fo" d="M 50 60 Q 80 35 110 60"/>
-        <polygon id="yk-R-roll-tip" class="yk-force-tip" style="color:#ffdd33" points="110,60 104,54 102,64"/>
-        <line id="yk-R-pitch-arc" class="yk-pitch-force fo" x1="30" y1="65" x2="30" y2="100"/>
-        <polygon id="yk-R-pitch-tip" class="yk-force-tip" style="color:#ffdd33" points="30,100 25,93 35,93"/>
-        <text x="80" y="155" text-anchor="middle" class="yk-lbl" style="font-size:6.5px;fill:#ffdd33">F/O 副驾</text>
-      </svg>
-      <div class="act-status" id="yk-R-status" style="font-size:9px;color:#ffdd33">—</div>
-    </div>
-  </div>
-  <div id="event-banner"><span id="eb-msg"></span><div class="esub" id="eb-sub"></div></div>
-  <div id="p-source" class="panel">
-    <span id="src-toggle">DATA FIDELITY 数据真实度 &#9662;</span>
-    <div id="src-list">
-      <b style="color:rgba(0,200,100,.7)">&#9632; MEASURED 实测数据</b> &mdash; ADS-B<br>
-      &nbsp; Position 位置 &bull; Altitude 高度 &bull; Ground Speed 地速<br>
-      &nbsp; Heading 航向 &bull; Vertical Speed 垂直速率<br>
-      &nbsp; <a href="https://github.com/cathaypacific8747/mu5735" target="_blank">FR24 ADS-B granular</a> &mdash; 27 of 397 pts selected<br>
-      &nbsp; <span class="src-note">Flight path and timing are real recorded data.<br>
-      &nbsp; 航迹与时间为真实记录数据。</span><br>
-      <b style="color:rgba(255,200,80,.7)">&#9632; MEASURED 实测</b> &mdash; FDR plot direct trace (NTSB Fig 11/13)<br>
-      &nbsp; FDR-traced phase 14:20:38&ndash;14:20:59 (T+0..T+21s):<br>
-      &nbsp; &nbsp; Pitch 俯仰: 0&deg; &rarr; &minus;35&deg; smoothstep monotonic<br>
-      &nbsp; &nbsp; Roll 滚转: 0&deg; &rarr; &minus;180&deg; (T+11s) &rarr; &minus;270&deg; (T+20s)<br>
-      &nbsp; &nbsp; <span class="src-note">Continuous left rotation; no oscillation<br>
-      &nbsp; &nbsp; 单方向左滚至右翼朝下，无振荡</span><br>
-      &nbsp; Eng1/Eng2 Cutoff SW: simultaneous RUN&rarr;CUTOFF<br>
-      &nbsp; AP-1/AP-2 Warn: ON ~3s after cutoff<br>
-      &nbsp; Rudder 方向舵: untouched throughout 全程未动<br>
-      &nbsp; FDR power loss ~26,000 ft FDR断电<br>
-      &nbsp; <a href="https://www.ntsb.gov" target="_blank">NTSB FOIA DCA22WA102</a> Fig 11/12/13<br><br>
-      <b style="color:rgba(255,100,80,.7)">&#9632; ESTIMATED 估算值</b><br>
-      &nbsp; Cruise 巡航: +2&deg; AOA, wings level 机翼水平<br>
-      &nbsp; &nbsp; <span class="src-note">Stable nominal attitude — no spline-derived jitter<br>
-      &nbsp; &nbsp; 稳定标称姿态，无样条切线抖动</span><br>
-      &nbsp; Post-FDR 断电后 — 三轴统一从 3D 速度矢量推导:<br>
-      &nbsp; &nbsp; Heading 航向 = atan2(tan.x, &minus;tan.z) (spline track)<br>
-      &nbsp; &nbsp; Pitch 俯仰 = asin(tan.y) + AOA(V/S)<br>
-      &nbsp; &nbsp; Bank 倾斜 = &minus;atan(v &middot; &omega; / g), &omega; from &Delta;track / 1.2s<br>
-      &nbsp; &nbsp; <span class="src-note">Nose follows trajectory (no sideslip) 机头沿航迹（无侧滑）<br>
-      &nbsp; &nbsp; Coordinated-turn relation 协调转弯公式</span><br>
-      &nbsp; Aerodynamic rate limits 气动速率限制:<br>
-      &nbsp; &nbsp; <span class="src-note">Pitch &le;25&deg;/s (30&deg;/s LOC), Roll &le;60&deg;/s (75&deg;/s LOC)<br>
-      &nbsp; &nbsp; Hdg &le;4&deg;/s cruise, &le;50&deg;/s dive; &omega; cap 35&deg;/s</span><br>
-      &nbsp; G-load G载荷 &mdash; rough approx 粗略估算<br><br>
-      <b style="color:rgba(120,120,120,.7)">&#9632; UNAVAILABLE 未公开</b><br>
-      &nbsp; Actual pitch / roll / AOA 实际俯仰·滚转·迎角<br>
-      &nbsp; Control surface deflections 操纵面偏转<br>
-      &nbsp; Engine parameters 发动机参数<br>
-      &nbsp; Full FDR readout 完整FDR数据<br><br>
-      <b>Model 模型:</b> Boeing 737-800 (FR24 B738 GLTF)<br>
-      <b>Impact 撞击点:</b> 23&deg;19'25.5"N 111&deg;06'44.3"E &mdash; CAAC<br><br>
-      <div style="border-top:1px solid rgba(0,255,136,.1);padding-top:6px;color:rgba(200,200,200,.4);font-size:8px;line-height:1.6">
-        DISCLAIMER 声明<br>
-        All data used in this reconstruction comes from publicly disclosed open sources.
-        No classified or restricted information is used.<br>
-        本重建所使用的全部数据均来自网上公开披露的开源信息，未使用任何保密或受限数据。
+    <section>
+      <h3>3 · 模拟控制 / RUN</h3>
+      <div id="transport">
+        <button id="play" class="primary">▶ 起飞</button>
+        <button id="pause">⏸</button>
+        <button id="restart">⟲</button>
+        <span class="speedwrap">×<span id="spdLabel">1.0</span> <input id="simSpeed" type="range" min="0.25" max="4" step="0.25" value="1"></span>
+        <span class="time" id="time">00:00 / 00:00</span>
       </div>
+    </section>
+
+    <section>
+      <h3>4 · 完整方案输出 / GENERATED PLAN</h3>
+      <pre id="planText" class="scroll"></pre>
+    </section>
+  </aside>
+
+  <main id="viewport">
+    <canvas id="canvas"></canvas>
+    <div id="camMenu">
+      <button data-cam="auto" class="active">AUTO</button>
+      <button data-cam="leader">LEADER</button>
+      <button data-cam="ground">GROUND</button>
+      <button data-cam="wide">WIDE</button>
     </div>
-  </div>
+    <div id="legend">
+      <div class="row"><span class="sw" style="background:#ff4848"></span> RED</div>
+      <div class="row"><span class="sw" style="background:#fff"></span> WHITE</div>
+      <div class="row"><span class="sw" style="background:#4ea8ff"></span> BLUE</div>
+      <div class="row"><span class="sw" style="background:#ffd24a"></span> GOLD</div>
+    </div>
+    <div id="statusBar">
+      <div class="stage" id="curModule">— STAND BY —</div>
+      <div class="next">NEXT · <span id="nextModule">…</span></div>
+    </div>
+    <div id="announce"><div class="name" id="annName"></div><div class="sub" id="annSub"></div></div>
+    <div id="timeline">
+      <div id="tl-track"><div id="tl-fill"></div><div id="tl-marker"></div><div id="tlticks"></div></div>
+    </div>
+  </main>
 </div>
 
 <script type="importmap">
 {"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/"}}
 </script>
+
 <script type="module">
 import * as THREE from 'three';
-import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
-import {GLTFLoader}    from 'three/addons/loaders/GLTFLoader.js';
+import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 
 /* ================================================================
-   ADS-B DATA — 27 points from FR24 granular (397 total)
-   Fields: timestamp, lat, lon, altitude(ft), ground_speed(kts),
-           heading(deg), vertical_speed(ft/min)
-   NO pitch/bank/attitude in ADS-B — those are DERIVED below.
-   Last point (impact) extrapolated from trajectory.
+   AIR SHOW PLANNER
+   - User configures team & a sequence of action modules.
+   - System auto-executes from takeoff → modules → landing.
+   - Followers track leader with formation-relative offsets.
    ================================================================ */
-const RAW=[
-  {t:1647843370.000,lat:23.453979,lon:110.235718,alt:29100,spd:455,hdg:100,vs:0},
-  {t:1647843432.000,lat:23.426250,lon:110.374756,alt:29100,spd:454,hdg:100,vs:0},
-  {t:1647843494.000,lat:23.403809,lon:110.513969,alt:29100,spd:455,hdg:99, vs:0},
-  {t:1647843549.000,lat:23.383530,lon:110.638763,alt:29100,spd:457,hdg:100,vs:0},
-  {t:1647843592.580,lat:23.367690,lon:110.735540,alt:29100,spd:457,hdg:100,vs:0},
-  {t:1647843597.120,lat:23.365830,lon:110.746820,alt:29100,spd:457,hdg:100,vs:0},
-  {t:1647843607.620,lat:23.361820,lon:110.771280,alt:29100,spd:457,hdg:100,vs:0},
-  {t:1647843618.822,lat:23.357910,lon:110.794780,alt:29100,spd:457,hdg:100,vs:0},
-  {t:1647843633.596,lat:23.352360,lon:110.828680,alt:29100,spd:457,hdg:100,vs:0},
-  {t:1647843643.714,lat:23.348740,lon:110.850830,alt:29100,spd:457,hdg:100,vs:0},
-  {t:1647843659.832,lat:23.358120,lon:110.885360,alt:27025,spd:433,hdg:98, vs:-21696},
-  {t:1647843659.987,lat:23.358120,lon:110.885800,alt:26875,spd:436,hdg:98, vs:-21888},
-  {t:1647843664.116,lat:23.357440,lon:110.896150,alt:24925,spd:425,hdg:91, vs:-30784},
-  {t:1647843669.150,lat:23.356610,lon:110.905430,alt:22250,spd:386,hdg:100,vs:-30976},
-  {t:1647843674.952,lat:23.352630,lon:110.915920,alt:17325,spd:429,hdg:123,vs:-30976},
-  {t:1647843679.828,lat:23.344740,lon:110.924320,alt:15325,spd:520,hdg:140,vs:-22528},
-  {t:1647843690.678,lat:23.323100,lon:110.944390,alt:12725,spd:551,hdg:127,vs:-16832},
-  {t:1647843695.160,lat:23.317110,lon:110.955920,alt:11000,spd:556,hdg:112,vs:-21312},
-  {t:1647843700.820,lat:23.314200,lon:110.969490,alt:9150, spd:558,hdg:100,vs:-21888},
-  {t:1647843705.578,lat:23.314900,lon:110.983380,alt:7850, spd:590,hdg:81, vs:-15744},
-  {t:1647843715.848,lat:23.307730,lon:111.014760,alt:7425, spd:565,hdg:75, vs:3520},
-  {t:1647843721.064,lat:23.309400,lon:111.028750,alt:8025, spd:531,hdg:84, vs:7360},
-  {t:1647843725.000,lat:23.309740,lon:111.040410,alt:8600, spd:507,hdg:88, vs:8448},
-  {t:1647843741.870,lat:23.330310,lon:111.074680,alt:8175, spd:446,hdg:79, vs:-13248},
-  {t:1647843751.888,lat:23.335330,lon:111.097540,alt:4375, spd:442,hdg:73, vs:-26752},
-  {t:1647843755.972,lat:23.337520,lon:111.105580,alt:3225, spd:376,hdg:87, vs:-30976},
-  {t:1647843758.500,lat:23.32375, lon:111.11231, alt:0,    spd:390,hdg:87, vs:-31000},
-];
 
-/* ================================================================
-   GEO CONVERSION — lat/lon/alt → local 3D coords
-   +X = East, +Y = Up, -Z = North
-   ================================================================ */
-const REF_LAT=23.34,REF_LON=110.95;
-const D2R=Math.PI/180,FT2M=0.3048;
-const M_LAT=111320,M_LON=M_LAT*Math.cos(REF_LAT*D2R);
-const SC=0.01;
-const g2l=(la,lo,af)=>new THREE.Vector3(
-  (lo-REF_LON)*M_LON*SC,
-  af*FT2M*SC,
-  -(la-REF_LAT)*M_LAT*SC
-);
+// ---------- Plan model ----------
+const MODULE_DEFS = {
+  TAKEOFF:          { label:'TAKEOFF · 起飞',     defDur:25, locked:true },
+  CLIMB:            { label:'CLIMB · 爬升',       defDur:12 },
+  CRUISE:           { label:'CRUISE · 巡航',      defDur:14 },
+  FORMATION_CHANGE: { label:'编队变换 → ',         defDur:10 },
+  LOOP:             { label:'LOOP · 筋斗',        defDur:14 },
+  BARREL_ROLL:      { label:'BARREL ROLL · 横滚', defDur:8 },
+  BOMB_BURST:       { label:'BOMB BURST · 爆破',  defDur:8 },
+  REGROUP:          { label:'REGROUP · 重整',     defDur:10 },
+  MIRROR_PASS:      { label:'MIRROR PASS · 对穿', defDur:14 },
+  LOW_PASS:         { label:'LOW PASS · 低空通场', defDur:14 },
+  HIGH_PASS:        { label:'HIGH PASS · 高空通场',defDur:12 },
+  BREAK_LANDING:    { label:'BREAK & LAND · 落地',defDur:35, locked:true },
+};
 
-const T0=RAW[0].t;
-const pts=RAW.map(d=>({...d, p:g2l(d.lat,d.lon,d.alt), dt:d.t-T0}));
-const DUR=pts[pts.length-1].dt;
-const START_T=255;
-const DI=10;
+const FORMATION_CYCLE = ['V','DIAMOND','ARROW','LINE','ECHELON_R','BOX'];
 
-/* ================================================================
-   SPLINE (position only) + INTERPOLATION
-   CatmullRom spline with getPoint() — NOT getPointAt().
-   getPoint(i/(N-1)) == control point i exactly.
-   Scalar data (alt, spd, vs, hdg) interpolated linearly from data.
-   ================================================================ */
-const curve=new THREE.CatmullRomCurve3(pts.map(p=>p.p.clone()),false,'centripetal');
-const N_PTS=pts.length;
+// Default sample plan
+const plan = {
+  team: { size:6, initialFormation:'TRAIL' },
+  alt:   { min:150, max:500, cruise:300 },
+  speed: { min:80, max:140, cruise:110 },
+  takeoffTime: 0,
+  modules: [
+    { type:'TAKEOFF',          duration:25 },
+    { type:'CLIMB',            duration:12, target:300 },
+    { type:'FORMATION_CHANGE', duration:10, target:'V' },
+    { type:'LOOP',             duration:14 },
+    { type:'FORMATION_CHANGE', duration:10, target:'DIAMOND' },
+    { type:'BARREL_ROLL',      duration:8 },
+    { type:'CRUISE',           duration:8 },
+    { type:'BOMB_BURST',       duration:8 },
+    { type:'REGROUP',          duration:12, formation:'V' },
+    { type:'MIRROR_PASS',      duration:14 },
+    { type:'FORMATION_CHANGE', duration:10, target:'ARROW' },
+    { type:'LOW_PASS',         duration:14 },
+    { type:'BREAK_LANDING',    duration:35 },
+  ],
+};
 
-function t2u(t){
-  let i=0;for(;i<N_PTS-1;i++)if(pts[i+1].dt>=t)break;
-  if(i>=N_PTS-1)i=N_PTS-2;
-  const s=pts[i+1].dt-pts[i].dt;
-  const f=s>0?Math.min(1,Math.max(0,(t-pts[i].dt)/s)):0;
-  return(i+f)/(N_PTS-1);
+// Recompute module start times
+function rebuildSchedule() {
+  let t = plan.takeoffTime;
+  for (const m of plan.modules) {
+    m.start = t;
+    m.end = t + (m.duration||MODULE_DEFS[m.type].defDur);
+    t = m.end;
+  }
+  plan.totalTime = t;
+  return t;
 }
 
-let smP=2*D2R,smB=0,smH=100,_lt=-1,_wasFDR=false;
+// ---------- Formations ----------
+// Returns offset in leader's local frame:
+//   +X right, +Y up, +Z behind leader (leader nose is -Z)
+const FORMATIONS = {
+  TRAIL: (n, i) => new THREE.Vector3(0, -i*1.0, i*16),
+  LINE:  (n, i) => new THREE.Vector3((i-(n-1)/2)*16, 0, 0),
+  ECHELON_R: (n, i) => new THREE.Vector3(i*12, -i*0.5, i*9),
+  ECHELON_L: (n, i) => new THREE.Vector3(-i*12, -i*0.5, i*9),
+  V: (n, i) => {
+    if (i === 0) return new THREE.Vector3(0, 0, 0);
+    const half = Math.ceil(i/2);
+    const side = (i%2 === 1) ? -1 : 1;
+    return new THREE.Vector3(side*half*13, 0, half*11);
+  },
+  DIAMOND: (n, i) => {
+    // 4-plane diamond plus extras trailing
+    const tab = [
+      [0,0,0], [13,0,12], [-13,0,12], [0,0,24],
+      [13,0,36], [-13,0,36], [0,0,48], [26,0,24], [-26,0,24],
+    ];
+    return new THREE.Vector3(...(tab[i] || [0,0,i*14]));
+  },
+  ARROW: (n, i) => {
+    if (i === 0) return new THREE.Vector3(0,0,0);
+    const side = (i%2 === 1) ? -1 : 1;
+    const rank = Math.ceil(i/2);
+    return new THREE.Vector3(side*rank*11, 0, rank*15);
+  },
+  BOX: (n, i) => {
+    const tab = [[0,0,0],[18,0,0],[0,0,18],[18,0,18],[36,0,9],[-18,0,9],[36,0,27],[-18,0,27],[9,0,36]];
+    return new THREE.Vector3(...(tab[i] || [0,0,i*14]));
+  },
+  // Used during burst — placeholder, real positions are scripted in module
+  BURST_RING: (n, i) => {
+    const a = (i/n)*Math.PI*2;
+    return new THREE.Vector3(Math.cos(a)*36, Math.sin(a)*22, 0);
+  },
+};
 
-function interp(t){
-  t=Math.min(DUR,Math.max(0,t));
-  let i=0;for(;i<N_PTS-1;i++)if(pts[i+1].dt>=t)break;
-  if(i>=N_PTS-1)i=N_PTS-2;
-
-  const a=pts[i],b=pts[i+1],seg=b.dt-a.dt;
-  const f=seg>0?Math.min(1,(t-a.dt)/seg):0;
-
-  // Position: CatmullRom spline — smooth, C1-continuous through data points
-  const u=t2u(t);
-  const pos=curve.getPoint(Math.min(1,Math.max(0,u)));
-  pos.y=Math.max(0,pos.y);
-
-  // Scalars: linear interpolation from ADS-B data
-  const alt=a.alt+(b.alt-a.alt)*f;
-  const spd=a.spd+(b.spd-a.spd)*f;
-  const vs=a.vs+(b.vs-a.vs)*f;
-  const lat=a.lat+(b.lat-a.lat)*f;
-  const lon=a.lon+(b.lon-a.lon)*f;
-
-  // Heading: circular linear interpolation
-  let dh=b.hdg-a.hdg;if(dh>180)dh-=360;if(dh<-180)dh+=360;
-  let tH=a.hdg+dh*f;if(tH<0)tH+=360;if(tH>=360)tH-=360;
-
-  // ── ATTITUDE TARGETS (phase-aware, physics-based) ──
-  // FDR window starts at engine cutoff (t=268s) and runs 21s until
-  // FDR power loss (~t=289s). Cruise ends at cutoff. Note the order:
-  // inFDR checked BEFORE inCruise so the FDR-traced trajectory wins
-  // for t ∈ [268, 289) regardless of pts[DI].dt timing.
-  const inFDR    = t >= 268 && t < 289;
-  const inCruise = !inFDR && t < pts[DI].dt - 1;
-  let tP, tB, fpa = 0;
-
-  // 3D velocity vector (unit) from spline tangent.
-  // +X=East, +Y=Up, -Z=North → track = atan2(x, -z), FPA = asin(y).
-  const tan3 = curve.getTangent(Math.min(0.9999, Math.max(0.0001, u)));
-  const horiz3 = Math.sqrt(tan3.x * tan3.x + tan3.z * tan3.z);
-  const fpa3D  = Math.atan2(tan3.y, horiz3);
-  let track3D  = Math.atan2(tan3.x, -tan3.z) * 180 / Math.PI;
-  if (track3D < 0) track3D += 360;
-
-  // Yaw rate from centered finite difference of track (rad/s).
-  // Used for coordinated-bank derivation. Skipped in cruise (≈ 0).
-  let yawRate = 0;
-  if (!inCruise) {
-    const dts = 0.6;
-    const tp = Math.max(0,   t - dts);
-    const tn = Math.min(DUR, t + dts);
-    const tnP = curve.getTangent(Math.min(0.9999, Math.max(0.0001, t2u(tp))));
-    const tnN = curve.getTangent(Math.min(0.9999, Math.max(0.0001, t2u(tn))));
-    let dTrack = Math.atan2(tnN.x, -tnN.z) - Math.atan2(tnP.x, -tnP.z);
-    if (dTrack >  Math.PI) dTrack -= 2 * Math.PI;
-    if (dTrack < -Math.PI) dTrack += 2 * Math.PI;
-    const dtSpan = (tn - tp) || 1e-3;
-    yawRate = dTrack / dtSpan;
-    // Plausibility cap (737 LOC peak yaw rate).
-    const YR_MAX = 35 * D2R;
-    if (yawRate >  YR_MAX) yawRate =  YR_MAX;
-    if (yawRate < -YR_MAX) yawRate = -YR_MAX;
-  }
-
-  if (inCruise) {
-    // Steady cruise: hold ~2° AOA, wings level. Lock visual altitude
-    // to the data so spline Y-jitter cannot produce attitude shake.
-    tP = 2 * D2R;
-    tB = 0;
-    pos.y = alt * FT2M * SC;
-  } else if (inFDR) {
-    // FDR-traced from NTSB FOIA DCA22WA102 Fig 11 (basic params)
-    // and Fig 13 (control forces + roll-angle zoom).
-    // T = engine cutoff; AP-1/AP-2 Warn ON at T+3s.
-    //   Pitch: 0° hold to T+5s, smoothstep to -35° at T+21s.
-    //   Roll : 0° hold to T+3s (AP still active until disconnect),
-    //          then continuous left rotation:
-    //          T+3s..T+11s : 0° → -180° (~22.5°/s, AP-off + left aileron)
-    //          T+11s..T+20s: -180° → -270° (~10°/s, slowing rotation)
-    //          T+20s..T+21s: hold -270°
-    //   Heading: unchanged (ADS-B linear interp ≈ 100°).
-    // No oscillation: FDR plot shows smooth monotonic curves, not tremor.
-    const tF = t - 268;
-    // Pitch: delayed onset matching FDR Fig 11
-    const pP = Math.max(0, Math.min(1, (tF - 5) / 16));
-    const easeP = pP * pP * (3 - 2 * pP);
-    tP = easeP * (-35 * D2R);
-    // Roll: piecewise cumulative angle from FDR Fig 13
-    let rollDeg;
-    if      (tF <  3) rollDeg = 0;
-    else if (tF < 11) rollDeg = -180 * ((tF - 3) / 8);
-    else if (tF < 20) rollDeg = -180 - 90 * ((tF - 11) / 9);
-    else              rollDeg = -270;
-    tB = rollDeg * D2R;
-    fpa = fpa3D;
-  } else {
-    // Post-FDR dive / recovery: derive ALL THREE attitude axes from the
-    // 3D trajectory tangent so the nose visually follows the path
-    // (coordinated flight, no sideslip).
-    fpa = fpa3D;
-    // Heading = horizontal direction of velocity vector.
-    tH = track3D;
-    // Pitch = FPA + AOA correction (column-pushed → nose below FP).
-    let aoa = 2 * D2R;
-    if (vs < -1000)      aoa = (2 - Math.min(18, Math.abs(vs) / 30000 * 18)) * D2R;
-    else if (vs > 1000)  aoa = (2 + Math.min(4,  vs / 10000 * 4)) * D2R;
-    tP = Math.max(-72 * D2R, Math.min(20 * D2R, fpa3D + aoa));
-    // Bank from coordinated-turn relation tan(φ) = v·ω / g.
-    const v_ms  = spd * 0.5144;
-    const tBraw = -Math.atan(v_ms * yawRate / 9.81);
-    tB = Math.max(-65 * D2R, Math.min(65 * D2R, tBraw));
-  }
-
-  // ── Smoothing + aerodynamic rate limits ──
-  // Frame-rate independent low-pass; phase-tuned time constant.
-  const el = _lt >= 0 ? Math.abs(t - _lt) : 1/60; _lt = t;
-  const tau = inCruise ? 2.5 : (inFDR ? 0.7 : 0.6);
-  const al  = 1 - Math.exp(-el / tau);
-  // Realistic 737 LOC angular rates (deg/s).
-  const dPmax = (inFDR ? 30 : 25) * D2R * el;
-  const dBmax = (inFDR ? 75 : 60) * D2R * el;
-  const dHmax = (inCruise ? 4 : 50) * el;
-
-  let stepP = (tP - smP) * al;
-  if (stepP >  dPmax) stepP =  dPmax;
-  if (stepP < -dPmax) stepP = -dPmax;
-  let stepB = (tB - smB) * al;
-  if (stepB >  dBmax) stepB =  dBmax;
-  if (stepB < -dBmax) stepB = -dBmax;
-  smP += stepP;
-  smB += stepB;
-
-  let hd2 = tH - smH;
-  if (hd2 >  180) hd2 -= 360;
-  if (hd2 < -180) hd2 += 360;
-  let stepH = hd2 * al;
-  if (stepH >  dHmax) stepH =  dHmax;
-  if (stepH < -dHmax) stepH = -dHmax;
-  smH += stepH;
-  if (smH <    0) smH += 360;
-  if (smH >= 360) smH -= 360;
-
-  // FDR → post-FDR boundary: wrap cumulative bank to nearest [-π, π]
-  // equivalent so post-FDR smoothing transitions naturally
-  // (e.g. -270° → +90°, then smooth toward spline-derived bank).
-  if (_wasFDR && !inFDR) {
-    while (smB < -Math.PI) smB += 2 * Math.PI;
-    while (smB >  Math.PI) smB -= 2 * Math.PI;
-  }
-  _wasFDR = inFDR;
-
-  let gL = 1 + Math.abs(vs) / 30000 * 1.5;
-  if (inFDR) {
-    // FDR Fig 11 Accel Vert: shows ~0.5g during the upset (occupants
-    // experiencing reduced g due to the unloaded dive + roll). Model
-    // a smooth g-load drop from 1g toward ~0.5g, with mild ripple.
-    const tF = t - 268;
-    const p  = Math.max(0, Math.min(1, tF / 21));
-    gL = 1 - 0.5 * (p * p * (3 - 2 * p)) + 0.15 * Math.sin(tF * 1.2);
-  }
-  let ph='CRUISE';
-  if(t>=pts[DI].dt){
-    if(vs>1000)ph='RECOVERY';
-    else if(alt<9000&&vs<-5000)ph='FINAL DIVE';
-    else if(vs<-5000)ph='INITIAL DIVE';
-    else ph='MANEUVERING';
-  }
-  return{pos,lat,lon,alt,spd,vs,hdg:smH,pitch:smP,bank:smB,fpa:fpa,gLoad:gL,phase:ph,t};
+function formationOffset(name, n, i) {
+  const fn = FORMATIONS[name] || FORMATIONS.TRAIL;
+  return fn(n, i);
 }
 
-/* ================================================================
-   RENDERER + SCENE
-   ================================================================ */
-const canvas=document.getElementById('canvas');
-const R=new THREE.WebGLRenderer({canvas,antialias:true,logarithmicDepthBuffer:true});
-R.setSize(innerWidth,innerHeight);R.setPixelRatio(Math.min(devicePixelRatio,2));
-R.shadowMap.enabled=true;R.toneMapping=THREE.ACESFilmicToneMapping;R.toneMappingExposure=1.3;
+// ---------- Three.js setup ----------
+const canvas = document.getElementById('canvas');
+const renderer = new THREE.WebGLRenderer({antialias:true, canvas});
+function resize() {
+  const w = canvas.clientWidth || canvas.parentElement.clientWidth;
+  const h = canvas.clientHeight || canvas.parentElement.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w/h;
+  camera.updateProjectionMatrix();
+}
+renderer.setPixelRatio(Math.min(devicePixelRatio||1, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
 
-const scene=new THREE.Scene();
-scene.background=new THREE.Color(0x87CEEB);
+const scene = new THREE.Scene();
+const skyTop = new THREE.Color(0x4a90d8);
+const skyBot = new THREE.Color(0xb8dcff);
+scene.background = skyBot.clone();
+scene.fog = new THREE.Fog(skyBot.clone().lerp(new THREE.Color(0xffffff), 0.15), 800, 5500);
 
-const cam=new THREE.PerspectiveCamera(55,innerWidth/innerHeight,0.05,20000);
-cam.position.set(5,40,30);
-const oc=new OrbitControls(cam,canvas);
-oc.enableDamping=true;oc.dampingFactor=.06;oc.minDistance=0.3;oc.maxDistance=800;
+const camera = new THREE.PerspectiveCamera(55, 1, 0.5, 9000);
+camera.position.set(80, 150, 600);
 
-scene.add(new THREE.AmbientLight(0x8899aa,.65));
-const sun=new THREE.DirectionalLight(0xffffee,1.8);
-sun.position.set(80,200,40);sun.castShadow=true;
-sun.shadow.mapSize.set(2048,2048);
-const shc=sun.shadow.camera;shc.left=-200;shc.right=200;shc.top=200;shc.bottom=-200;
+addEventListener('resize', resize);
+new ResizeObserver(resize).observe(canvas.parentElement);
+
+// Lights
+const sun = new THREE.DirectionalLight(0xfff2cc, 1.15);
+sun.position.set(500, 800, 300);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+const sc = sun.shadow.camera;
+sc.left = -400; sc.right = 400; sc.top = 400; sc.bottom = -400; sc.near = 100; sc.far = 2200;
+sun.shadow.bias = -0.0004;
 scene.add(sun);
-scene.add(new THREE.HemisphereLight(0x88ccff,0x446633,.3));
+scene.add(new THREE.HemisphereLight(0xb6daff, 0x4a8a3a, 0.55));
 
-/* ── sky ── */
-scene.add(new THREE.Mesh(
-  new THREE.SphereGeometry(5000,32,24),
-  new THREE.ShaderMaterial({side:THREE.BackSide,depthWrite:false,
-    vertexShader:`varying vec3 vW;void main(){vW=(modelMatrix*vec4(position,1.)).xyz;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
-    fragmentShader:`varying vec3 vW;void main(){float h=normalize(vW).y;vec3 c=mix(vec3(.55,.70,.90),vec3(.25,.45,.85),clamp(h*2.,.0,1.));c=mix(c,vec3(.80,.85,.92),pow(1.-abs(h),6.));gl_FragColor=vec4(c,1.);}`
-  })
-));
-
-/* ================================================================
-   SATELLITE TERRAIN
-   ================================================================ */
-function lon2tx(lon,z){return Math.floor((lon+180)/360*Math.pow(2,z));}
-function lat2ty(lat,z){const r=lat*D2R;return Math.floor((1-Math.log(Math.tan(r)+1/Math.cos(r))/Math.PI)/2*Math.pow(2,z));}
-function tx2lon(x,z){return x/Math.pow(2,z)*360-180;}
-function ty2lat(y,z){const n=Math.PI-2*Math.PI*y/Math.pow(2,z);return 180/Math.PI*Math.atan(.5*(Math.exp(n)-Math.exp(-n)));}
-
-async function loadSatTerrain(){
-  const zoom=13,W=110.72,E=111.18,S2=23.26,N=23.48;
-  const xMin=lon2tx(W,zoom),xMax=lon2tx(E,zoom);
-  const yMin=lat2ty(N,zoom),yMax=lat2ty(S2,zoom);
-  const tw=xMax-xMin+1,th=yMax-yMin+1;
-  const cv=document.createElement('canvas');cv.width=tw*256;cv.height=th*256;
-  const ctx=cv.getContext('2d');ctx.fillStyle='#2a3a2a';ctx.fillRect(0,0,cv.width,cv.height);
-  const jobs=[];
-  for(let ty=yMin;ty<=yMax;ty++)for(let tx=xMin;tx<=xMax;tx++){
-    jobs.push(new Promise(res=>{
-      const img=new Image();img.crossOrigin='anonymous';
-      img.onload=()=>{ctx.drawImage(img,(tx-xMin)*256,(ty-yMin)*256);res(true);};
-      img.onerror=()=>res(false);
-      img.src=`https://mt${(tx+ty)%4}.google.com/vt/lyrs=s&x=${tx}&y=${ty}&z=${zoom}`;
-    }));
-  }
-  const results=await Promise.all(jobs);
-  const loaded=results.filter(Boolean).length;
-  console.log(`Sat tiles: ${loaded}/${jobs.length}`);
-  const aW=tx2lon(xMin,zoom),aE=tx2lon(xMax+1,zoom);
-  const aN=ty2lat(yMin,zoom),aS=ty2lat(yMax+1,zoom);
-  const tex=new THREE.CanvasTexture(cv);tex.minFilter=THREE.LinearMipMapLinearFilter;
-  tex.anisotropy=R.capabilities.getMaxAnisotropy();
-  const p1=g2l(aN,aW,0),p2=g2l(aS,aE,0);
-  const w=Math.abs(p2.x-p1.x),h=Math.abs(p2.z-p1.z);
-  const cx=(p1.x+p2.x)/2,cz=(p1.z+p2.z)/2;
-  const geo=new THREE.PlaneGeometry(w,h,120,120);geo.rotateX(-Math.PI/2);
-  const P=geo.attributes.position;
-  for(let i2=0;i2<P.count;i2++){
-    const x=P.getX(i2)+cx,z=P.getZ(i2)+cz;
-    P.setY(i2,Math.max(Math.sin(x*.018)*Math.cos(z*.013)*1.8+Math.sin(x*.047+1)*Math.cos(z*.038+2)*.8+Math.sin(x*.11+3)*Math.cos(z*.09)*.4,-.3));
-    P.setX(i2,P.getX(i2)+cx);P.setZ(i2,P.getZ(i2)+cz);
-  }
-  geo.computeVertexNormals();
-  const mesh=new THREE.Mesh(geo,new THREE.MeshStandardMaterial({map:tex,roughness:.92,metalness:0}));
-  mesh.receiveShadow=true;scene.add(mesh);return{loaded,mesh};
-}
-
-function makeFallbackTerrain(){
-  const g=new THREE.PlaneGeometry(800,800,150,150);g.rotateX(-Math.PI/2);
-  const P=g.attributes.position;
-  for(let i2=0;i2<P.count;i2++){
-    const x=P.getX(i2),z=P.getZ(i2);
-    P.setY(i2,Math.max(Math.sin(x*.018)*Math.cos(z*.013)*2+Math.sin(x*.047+1)*Math.cos(z*.038+2)+Math.sin(x*.11+3)*Math.cos(z*.09)*.5,-.5));
-  }
-  g.computeVertexNormals();
-  const cols=new Float32Array(P.count*3);
-  for(let i2=0;i2<P.count;i2++){const y=P.getY(i2);cols[i2*3]=.12+y*.015;cols[i2*3+1]=.32+y*.025;cols[i2*3+2]=.08;}
-  g.setAttribute('color',new THREE.BufferAttribute(cols,3));
-  scene.add(new THREE.Mesh(g,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.9})));
-}
-
-/* ── crash marker ── */
-function makeCrashMarker(){
-  const cp=g2l(23.32375,111.11231,0);
-  const ring=new THREE.Mesh(new THREE.RingGeometry(1.2,1.6,32),
-    new THREE.MeshBasicMaterial({color:0xcc2200,side:THREE.DoubleSide,transparent:true,opacity:.7}));
-  ring.rotation.x=-Math.PI/2;ring.position.copy(cp);ring.position.y=.15;
-  scene.add(ring);window._ring=ring;
-  const cv2=document.createElement('canvas');cv2.width=256;cv2.height=48;
-  const c2=cv2.getContext('2d');c2.fillStyle='#ff4444';c2.font='bold 20px Courier New';c2.textAlign='center';
-  c2.fillText('IMPACT SITE',128,20);c2.font='13px Courier New';c2.fillText("23°19'25.5\"N 111°06'44.3\"E",128,40);
-  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(cv2),transparent:true}));
-  sp.position.copy(cp);sp.position.y=4;sp.scale.set(14,2.6,1);scene.add(sp);
-}
-
-/* ── flight path ── */
-function makeFlightPath(){
-  // Split green (stable cruise) from orange (descent + LOC onset) at the
-  // LAST actual cruise sample pts[DI-1], not at pts[DI]. The 16-s gap
-  // between pts[DI-1] and pts[DI] is the FDR-disclosed LOC-onset window
-  // (fuel cutoff, AP off, column push). pts[DI] sits ~1.7 km north of
-  // the cruise-heading extrapolation, so the spline must curve north
-  // through that gap — that bend belongs to the descent line.
-  const cruEnd = pts[DI-1].dt;
-  const cruP=[];const cruN=50;
-  for(let j=0;j<=cruN;j++){const tt=START_T+(cruEnd-START_T)*j/cruN;cruP.push(curve.getPoint(t2u(tt)));}
-  scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(cruP),
-    new THREE.LineBasicMaterial({color:0x00cc66,transparent:true,opacity:.5})));
-  const desP=[];const N2=400;
-  for(let j=0;j<=N2;j++){
-    const u=t2u(cruEnd+(DUR-cruEnd)*j/N2);
-    desP.push(curve.getPoint(Math.min(1,Math.max(0,u))));
-  }
-  const dc=[];for(let j=0;j<=N2;j++){const r=j/N2;dc.push(1,1-r*.7,.3-r*.3);}
-  const dg=new THREE.BufferGeometry().setFromPoints(desP);
-  dg.setAttribute('color',new THREE.Float32BufferAttribute(dc,3));
-  scene.add(new THREE.Line(dg,new THREE.LineBasicMaterial({vertexColors:true})));
-  const gp=desP.map(v=>new THREE.Vector3(v.x,.08,v.z));
-  const gl2=new THREE.Line(new THREE.BufferGeometry().setFromPoints(gp),
-    new THREE.LineDashedMaterial({color:0xaa3333,dashSize:.5,gapSize:.3,transparent:true,opacity:.3}));
-  gl2.computeLineDistances();scene.add(gl2);
-  for(let i2=DI;i2<N_PTS;i2+=2){const p=pts[i2].p;const ll=new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints([p,new THREE.Vector3(p.x,0,p.z)]),
-    new THREE.LineDashedMaterial({color:0x993333,dashSize:.8,gapSize:.5,transparent:true,opacity:.12}));
-    ll.computeLineDistances();scene.add(ll);}
-  const dotG=new THREE.SphereGeometry(.15,6,6);
-  for(let i2=DI;i2<N_PTS;i2++){
-    const dot=new THREE.Mesh(dotG,new THREE.MeshBasicMaterial({color:i2===N_PTS-1?0xff2222:0xffaa44}));
-    dot.position.copy(pts[i2].p);scene.add(dot);
-    // Persistent ADS-B sample label — HTML vector text projected to 2D each frame
-    adsLabels.push(makeAdsLabel(pts[i2]));
-  }
-}
-// Build an HTML label DOM element for an ADS-B point.
-const adsLabels = [];
-function makeAdsLabel(pt){
-  const div = document.createElement('div');
-  div.className = 'ads-label';
-  const vsColor = pt.vs < -5000 ? '#ff8a78' : pt.vs > 1000 ? '#9af09a' : '#dcdcdc';
-  const vsTxt = (pt.vs >= 0 ? '+' : '') + pt.vs.toLocaleString();
-  div.innerHTML =
-    '<div class="ads-alt">' + pt.alt.toLocaleString() + ' ft</div>' +
-    '<div class="ads-spd">' + pt.spd + ' kts</div>' +
-    '<div class="ads-vs" style="color:' + vsColor + '">' + vsTxt + ' fpm</div>';
-  document.getElementById('hud').appendChild(div);
-  return { div: div, pos: pt.p.clone(), yOffset: 1.6, t: pt.dt };
-}
-// Per-frame ADS-B label management:
-//  - Only show labels within ~55u of aircraft (no clutter from far points)
-//  - Smooth fade-out at the show-range edge
-//  - Anti-overlap on screen: closer-to-aircraft label wins
-//  - Active label (timestamp nearest current playback) is emphasised
-//  - Perspective distance scale (close = larger)
-const _adsProj  = new THREE.Vector3();
-const _adsAcPos = new THREE.Vector3();
-function updAdsLabels(){
-  AG.getWorldPosition(_adsAcPos);
-  // Pass 1: project + classify each label
-  const states = [];
-  for (let i = 0; i < adsLabels.length; i++) {
-    const l = adsLabels[i];
-    const acDist = _adsAcPos.distanceTo(l.pos);
-    const camDist = cam.position.distanceTo(l.pos);
-    _adsProj.copy(l.pos);
-    _adsProj.y += l.yOffset;
-    _adsProj.project(cam);
-    const off = _adsProj.z > 1 || Math.abs(_adsProj.x) > 1.08 || Math.abs(_adsProj.y) > 1.08;
-    const sx = (_adsProj.x + 1) * 0.5 * innerWidth;
-    const sy = (-_adsProj.y + 1) * 0.5 * innerHeight;
-    states.push({ l: l, acDist: acDist, camDist: camDist, sx: sx, sy: sy,
-                  off: off, dt: Math.abs(l.t - S.t), show: false });
-  }
-  // Pass 2: visibility decision — closest-to-aircraft labels win
-  const order = states.slice().sort((a, b) => a.acDist - b.acDist);
-  const shownPts = [];
-  for (let k = 0; k < order.length; k++) {
-    const s = order[k];
-    if (s.off) continue;
-    if (s.acDist > 55) continue;                    // out-of-range hide
-    let conflict = false;                            // anti-overlap on screen
-    for (let j = 0; j < shownPts.length; j++) {
-      const dx = s.sx - shownPts[j].sx;
-      const dy = s.sy - shownPts[j].sy;
-      if (dx*dx + dy*dy < 55*55) { conflict = true; break; }
-    }
-    if (conflict) continue;
-    s.show = true;
-    shownPts.push(s);
-  }
-  // Pass 3: apply opacity / scale / transform.
-  // Size + alpha use a continuous time-proximity boost so labels don't pop
-  // as the nearest-time label changes.
-  for (let i = 0; i < states.length; i++) {
-    const s = states[i];
-    const l = s.l;
-    if (!s.show) {
-      if (l.div.style.opacity !== '0') l.div.style.opacity = '0';
-      continue;
-    }
-    // Smooth fade in 30u..55u edge (full-bright inside 30u)
-    let alpha = s.acDist <= 30 ? 1 : Math.max(0.15, 1 - (s.acDist - 30) / 25);
-    // Perspective scale; reference dist 25u → 1.0×, clamp [0.7..1.4]
-    let scale = Math.max(0.7, Math.min(1.4, 25 / Math.max(s.camDist, 8)));
-    // Continuous time-proximity boost: 1 at dt=0, ~0 by dt≈6s
-    const tBoost = Math.exp(-s.dt / 2.5);
-    scale *= 1 + 0.2 * tBoost;
-    alpha = Math.min(1, alpha + 0.25 * tBoost);
-    l.div.style.opacity = alpha.toFixed(2);
-    l.div.style.transform = 'translate(-50%,-50%) translate(' + s.sx.toFixed(1) + 'px,' + s.sy.toFixed(1) + 'px) scale(' + scale.toFixed(2) + ')';
-  }
-}
-
-function makeAltLabels(){
-  [5000,10000,15000,20000,25000,29100].forEach(a=>{
-    const y=a*FT2M*SC;const cv=document.createElement('canvas');cv.width=96;cv.height=24;
-    const c=cv.getContext('2d');c.fillStyle=a===29100?'#44dd88':'#556677';
-    c.font='14px Courier New';c.fillText((a/1000|0)+'k ft',4,17);
-    const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(cv),transparent:true,opacity:.45}));
-    sp.scale.set(4,1,1);sp.position.set(pts[DI].p.x-8,y,pts[DI].p.z+4);scene.add(sp);
+// Sky gradient sphere
+{
+  const g = new THREE.SphereGeometry(5000, 32, 16);
+  const m = new THREE.ShaderMaterial({
+    uniforms:{ top:{value:skyTop}, bot:{value:skyBot}},
+    vertexShader:`varying vec3 vP;void main(){vP=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
+    fragmentShader:`uniform vec3 top;uniform vec3 bot;varying vec3 vP;void main(){float t=clamp(vP.y/2800.,0.,1.);gl_FragColor=vec4(mix(bot,top,pow(t,0.7)),1.);}`,
+    side:THREE.BackSide, depthWrite:false
   });
+  scene.add(new THREE.Mesh(g, m));
 }
 
-/* ================================================================
-   AIRCRAFT MODEL
-   ================================================================ */
-const AG=new THREE.Group();AG.visible=false;scene.add(AG);
+// Sun visual
+{
+  const m = new THREE.Mesh(new THREE.SphereGeometry(80,16,12), new THREE.MeshBasicMaterial({color:0xfff8c0}));
+  m.position.copy(sun.position).normalize().multiplyScalar(3800);
+  scene.add(m);
+}
 
-async function loadAircraft(){
-  const loader=new GLTFLoader();
-  try{
-    const gltf=await new Promise((res,rej)=>loader.load('b738.glb',res,undefined,rej));
-    const m=gltf.scene;
-    const box=new THREE.Box3().setFromObject(m);
-    const sz=box.getSize(new THREE.Vector3());
-    // After GLB internal transforms (Y_UP + per-node R_z): nose at -Z, fin at +Y
-    // R_y(-π/2) rotates nose from -Z to +X (the heading formula's forward axis)
-    m.rotation.y = -Math.PI/2;
-    const box2=new THREE.Box3().setFromObject(m);
-    const mx=Math.max(box2.getSize(new THREE.Vector3()).x,box2.getSize(new THREE.Vector3()).y,box2.getSize(new THREE.Vector3()).z);
-    m.scale.multiplyScalar(2.4/mx);
-    const box3=new THREE.Box3().setFromObject(m);
-    m.position.sub(box3.getCenter(new THREE.Vector3()));
-    m.traverse(c=>{if(c.isMesh){c.castShadow=true;c.receiveShadow=true;}});
-    AG.add(m);
-    console.log('B738 model loaded');
-  }catch(e){
-    console.warn('B738 load failed, using procedural:',e);
-    buildSimple();
+// Clouds
+{
+  const cm = new THREE.MeshBasicMaterial({color:0xffffff, transparent:true, opacity:0.8, depthWrite:false});
+  for (let i=0;i<35;i++) {
+    const g = new THREE.Group();
+    for (let k=0;k<5;k++) {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(20+Math.random()*30, 8, 6), cm);
+      m.position.set((Math.random()-0.5)*60, (Math.random()-0.5)*15, (Math.random()-0.5)*40);
+      g.add(m);
+    }
+    g.position.set((Math.random()-0.5)*5500, 280+Math.random()*350, (Math.random()-0.5)*5500);
+    scene.add(g);
   }
 }
 
-function buildSimple(){
-  const g=new THREE.Group();
-  const wm=new THREE.MeshStandardMaterial({color:0xf0f0f5,roughness:.3,metalness:.5});
-  const bm=new THREE.MeshStandardMaterial({color:0x1a3399,roughness:.3,metalness:.4});
-  const em=new THREE.MeshStandardMaterial({color:0x778899,roughness:.45,metalness:.65});
-  const fp=[];for(let i2=0;i2<=40;i2++){const t2=i2/40,x=(t2-.5)*2.4;let r=.19;if(t2<.15)r=.19*Math.sqrt(1-((0.15-t2)/0.15)**2);else if(t2>.85)r=.19*(1-((t2-.85)/.15)**1.5);fp.push(new THREE.Vector2(r,x));}
-  const fg=new THREE.LatheGeometry(fp,20);fg.rotateZ(Math.PI/2);g.add(new THREE.Mesh(fg,wm));
-  g.add(new THREE.Mesh(new THREE.BoxGeometry(.5,.015,1.8),wm));
-  const tf=new THREE.Mesh(new THREE.BoxGeometry(.35,.45,.015),bm);tf.position.set(-.9,.28,0);g.add(tf);
-  const hs=new THREE.Mesh(new THREE.BoxGeometry(.25,.012,.65),wm);hs.position.set(-1,.06,0);g.add(hs);
-  [-1,1].forEach(s=>{const eg=new THREE.CylinderGeometry(.07,.08,.35,12);eg.rotateZ(Math.PI/2);const e2=new THREE.Mesh(eg,em);e2.position.set(.12,-.16,s*.45);g.add(e2);});
-  g.traverse(c=>{if(c.isMesh){c.castShadow=true;c.receiveShadow=true;}});
-  AG.add(g);
+// Ground
+const groundGeo = new THREE.PlaneGeometry(9000, 9000, 80, 80);
+groundGeo.rotateX(-Math.PI/2);
+{
+  const pos = groundGeo.attributes.position;
+  for (let i=0;i<pos.count;i++) {
+    const x = pos.getX(i), z = pos.getZ(i);
+    const r = Math.hypot(x, z);
+    let h = Math.sin(x*0.0028)*Math.cos(z*0.0031)*5 + Math.sin(x*0.0009+z*0.0007)*8;
+    if (r < 800) h *= Math.max(0,(r-200)/600);
+    pos.setY(i, h);
+  }
+  groundGeo.computeVertexNormals();
+}
+const ground = new THREE.Mesh(groundGeo, new THREE.MeshStandardMaterial({color:0x4f9043, roughness:1}));
+ground.receiveShadow = true;
+scene.add(ground);
+
+// Runway
+{
+  const rw = new THREE.Mesh(new THREE.PlaneGeometry(60, 1600), new THREE.MeshStandardMaterial({color:0x202024, roughness:0.92}));
+  rw.rotation.x = -Math.PI/2;
+  rw.position.y = 0.05;
+  rw.receiveShadow = true;
+  scene.add(rw);
+  const sm = new THREE.MeshBasicMaterial({color:0xfff8c0});
+  for (let z=-740; z<=740; z+=60) {
+    const s = new THREE.Mesh(new THREE.PlaneGeometry(2, 26), sm);
+    s.rotation.x = -Math.PI/2;
+    s.position.set(0, 0.06, z);
+    scene.add(s);
+  }
+  // crowd line and show center marker (north of runway, +Z forward isn't ideal — show line is parallel to runway X axis at z=0)
+  const showLine = new THREE.Mesh(new THREE.PlaneGeometry(2000, 4), new THREE.MeshBasicMaterial({color:0xff7755}));
+  showLine.rotation.x = -Math.PI/2;
+  showLine.position.set(-160, 0.07, 0); // crowd line
+  scene.add(showLine);
 }
 
-/* ================================================================
-   EVENTS
-   ================================================================ */
-const EVT=[
-  {t:268,m:"ENG FUEL CUTOFF 燃油切断",s:"FDR Fig 11: both engine fuel switches RUN→CUTOFF at FL291 双发燃油开关同时从运行切至关断",tl:"Fuel cutoff 燃油切断"},
-  {t:271,m:"AP OFF + LEFT ROLL BEGINS 自驾断开+开始左滚",s:"FDR Fig 11: AP-1/AP-2 Warn ON ~3s after cutoff; sustained left aileron input begins 自驾断开+持续左压副翼",tl:"AP off+left roll 断开+左滚"},
-  {t:274,m:"LAST STABLE — FL291 最后稳定高度",s:"29,100 ft, 457 kts, heading 100° — all nominal 所有参数正常",tl:"Last stable 稳定"},
-  {t:275,m:"ROLL PASSES -90° 左翼下沉 90°",s:"FDR Fig 13: roll angle through -90° (left wing fully down); pitch ~-2° 左翼朝下90°",tl:"Roll -90° 左90°"},
-  {t:279,m:"INVERTED 倒扣 — ROLL -180°",s:"FDR Fig 13: roll wraps -180°/+180° (aircraft inverted); pitch ~-11° 机身倒扣",tl:"Inverted 倒扣"},
-  {t:288,m:"ROLL -270° 右翼朝下 90°",s:"FDR Fig 13: roll continues to ~+90° displayed (270° cumulative left); pitch ~-34° 右翼朝下90°",tl:"Roll -270° 右90°"},
-  {t:290,m:"DESCENT — 27,025 FT 开始下降",s:"ADS-B: V/S -21,696 ft/min — 16s gap since stable 距稳定点16秒",tl:"Descent 下降"},
-  {t:291,m:"FDR STOPS ~26,000 FT FDR断电",s:"Engine N2 below generator threshold, electrical power lost 发电机失电",tl:"FDR stop 断电"},
-  {t:305,m:"DIVE STEEPENS 俯冲加剧 — 17,325 FT",s:"V/S -30,976 ft/min, heading 91°→123° 航向急变",tl:"Steepen 加剧"},
-  {t:336,m:"1ST DIVE BOTTOM 首次触底 — 7,850 FT",s:"Ground speed 590 kts, V/S -15,744 ft/min",tl:"Bottom 触底"},
-  {t:346,m:"RECOVERY 拉起",s:"V/S turns positive +3,520 ft/min, altitude rising 高度回升",tl:"Recovery 拉起"},
-  {t:355,m:"PEAK RECOVERY 拉起峰值 — 8,600 FT",s:"Gained ~1,200 ft, speed 507 kts 回升约370米",tl:"Peak 峰值"},
-  {t:372,m:"2ND DIVE 二次俯冲",s:"V/S -13,248 ft/min at 8,175 ft 再次进入俯冲",tl:"2nd dive 二次"},
-  {t:386,m:"LAST ADS-B 最后信号 — 3,225 FT",s:"376 kts, V/S -30,976 ft/min",tl:"Last signal 末信号"},
-  {t:388.5,m:"IMPACT 撞击 — TENG COUNTY 藤县",s:"23°19'25.5\"N 111°06'44.3\"E — witnesses: spiral/tumble 目击：螺旋翻滚",tl:"IMPACT 撞击"},
-];
-let lastEI=-1,bannerT=0;
-const eBanner=document.getElementById('event-banner'),eMsg=document.getElementById('eb-msg'),eSub=document.getElementById('eb-sub');
-const evtEls=document.querySelectorAll('.evt');
+// Hangars + tower
+function box(w,h,d,col){return new THREE.Mesh(new THREE.BoxGeometry(w,h,d), new THREE.MeshStandardMaterial({color:col,roughness:0.7}));}
+{
+  const hangar = box(90, 38, 55, 0xc9c2a8); hangar.position.set(180, 19, -260); hangar.castShadow=hangar.receiveShadow=true; scene.add(hangar);
+  const tower = box(15, 80, 15, 0xefe6cf); tower.position.set(-200, 40, -260); tower.castShadow=true; scene.add(tower);
+  const cab   = box(24, 12, 24, 0x2a4d8f); cab.position.set(-200, 86, -260); cab.castShadow=true; scene.add(cab);
+  for (let i=0;i<5;i++) {
+    const w=18+Math.random()*20, h=6+Math.random()*8, d=18+Math.random()*16;
+    const b=box(w,h,d, new THREE.Color().setHSL(0.08+Math.random()*0.1,0.1,0.6+Math.random()*0.2).getHex());
+    b.position.set(220+i*32, h/2, 80+Math.random()*40); b.castShadow=true; b.receiveShadow=true; scene.add(b);
+  }
+}
 
-/* ── COCKPIT INTERACTION CARDS ──
-   Event-driven per-part visualizations. Each card auto-shows during the
-   FDR-recorded window when its parameter is actively changing, and
-   hides otherwise. Visuals match the real 737 part geometry (lift-throw
-   fuel switch with detent fence, etc).
-   tF = t − 268 (engine cutoff = T+0). */
-const act = {strip:null,
-  fuelCard:null, fuel1Tog:null, fuel2Tog:null, fuel1Skirt:null, fuel2Skirt:null, fuel1Hand:null, fuel2Hand:null, fuel1Stem:null, fuel2Stem:null, fuel1Head:null, fuel2Head:null, fuelStatus:null, fuelSvg:null, fuelFlashed:false,
-  apCard:null, apLight1:null, apLight2:null, apStatus:null, apSvg:null, apFlashed:false,
-  // Captain yoke+column (left)
-  yokeLCard:null, yokeLTilt:null, yokeLRot:null, yokeLStatus:null,
-  ykLRollArc:null, ykLRollTip:null, ykLPitchArc:null, ykLPitchTip:null,
-  // F/O yoke+column (right)
-  yokeRCard:null, yokeRTilt:null, yokeRRot:null, yokeRStatus:null,
-  ykRRollArc:null, ykRRollTip:null, ykRPitchArc:null, ykRPitchTip:null,
-  // Standalone DUAL/FIGHT badge
-  dualCard:null};
-function actInit(){
-  act.strip      = document.getElementById('p-actions');
-  // Fuel switch
-  act.fuelCard   = document.getElementById('card-fuel');
-  act.fuelSvg    = act.fuelCard.querySelector('svg');
-  act.fuel1Tog   = document.getElementById('fsw-1-tog');
-  act.fuel2Tog   = document.getElementById('fsw-2-tog');
-  act.fuel1Skirt = document.getElementById('fsw-1-skirt');
-  act.fuel2Skirt = document.getElementById('fsw-2-skirt');
-  act.fuel1Hand  = document.getElementById('fsw-1-hand');
-  act.fuel2Hand  = document.getElementById('fsw-2-hand');
-  act.fuel1Stem  = document.getElementById('fsw-1-stem');
-  act.fuel2Stem  = document.getElementById('fsw-2-stem');
-  act.fuel1Head  = document.getElementById('fsw-1-head');
-  act.fuel2Head  = document.getElementById('fsw-2-head');
-  act.fuelStatus = document.getElementById('fsw-status');
-  // AP indicators
-  act.apCard     = document.getElementById('card-ap');
-  act.apSvg      = act.apCard.querySelector('svg');
-  act.apLight1   = document.getElementById('ap-light-1');
-  act.apLight2   = document.getElementById('ap-light-2');
-  act.apStatus   = document.getElementById('ap-status');
-  // Yoke+column — Captain (left)
-  act.yokeLCard   = document.getElementById('card-yoke-L');
-  act.yokeLTilt   = document.getElementById('yoke-L-tilt');
-  act.yokeLRot    = document.getElementById('yoke-L-rot');
-  act.yokeLStatus = document.getElementById('yk-L-status');
-  act.ykLRollArc  = document.getElementById('yk-L-roll-arc');
-  act.ykLRollTip  = document.getElementById('yk-L-roll-tip');
-  act.ykLPitchArc = document.getElementById('yk-L-pitch-arc');
-  act.ykLPitchTip = document.getElementById('yk-L-pitch-tip');
-  // Yoke+column — F/O (right)
-  act.yokeRCard   = document.getElementById('card-yoke-R');
-  act.yokeRTilt   = document.getElementById('yoke-R-tilt');
-  act.yokeRRot    = document.getElementById('yoke-R-rot');
-  act.yokeRStatus = document.getElementById('yk-R-status');
-  act.ykRRollArc  = document.getElementById('yk-R-roll-arc');
-  act.ykRRollTip  = document.getElementById('yk-R-roll-tip');
-  act.ykRPitchArc = document.getElementById('yk-R-pitch-arc');
-  act.ykRPitchTip = document.getElementById('yk-R-pitch-tip');
-  // Dual / fight badge
-  act.dualCard   = document.getElementById('card-dual');
-  // Control surfaces
-  act.surfCard   = document.getElementById('card-surf');
-  act.surfAilL   = document.getElementById('surf-ail-L');
-  act.surfAilR   = document.getElementById('surf-ail-R');
-  act.surfElev   = document.getElementById('surf-elev');
-  act.surfAilLVal= document.getElementById('surf-ail-L-val');
-  act.surfAilRVal= document.getElementById('surf-ail-R-val');
-  act.surfElevVal= document.getElementById('surf-elev-val');
-  act.surfElevCause = document.getElementById('surf-elev-cause');
-  act.surfStatus = document.getElementById('surf-status');
+// Trees
+{
+  const tr = new THREE.MeshStandardMaterial({color:0x366024, roughness:1});
+  const tk = new THREE.MeshStandardMaterial({color:0x553322, roughness:1});
+  for (let i=0;i<240;i++) {
+    const t = new THREE.Group();
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.7,4,5), tk); trunk.position.y=2;
+    const top = new THREE.Mesh(new THREE.ConeGeometry(3+Math.random()*2, 8+Math.random()*5, 6), tr); top.position.y=8;
+    t.add(trunk); t.add(top);
+    let x, z;
+    do { x = (Math.random()-0.5)*7000; z = (Math.random()-0.5)*7000; }
+    while (Math.abs(x) < 90 && Math.abs(z) < 900);
+    t.position.set(x, 0, z);
+    t.scale.setScalar(0.7+Math.random()*0.9);
+    t.rotation.y = Math.random()*Math.PI*2;
+    scene.add(t);
+  }
 }
-function flashEl(el, cls){
-  if(!el) return;
-  el.classList.remove(cls);
-  // force reflow so animation re-triggers
-  void el.offsetWidth;
-  el.classList.add(cls);
-  setTimeout(()=>el.classList.remove(cls), 700);
+
+// ---------- Plane fleet ----------
+const PLANE_COLORS = [0xff4848, 0xffffff, 0x4ea8ff, 0xffd24a, 0xa055ff, 0x55ffaa, 0xff6688, 0x66e0ff, 0xddccaa];
+let planeTemplate = null;
+const planes = [];
+
+class Plane {
+  constructor(idx, color) {
+    this.idx = idx;
+    this.color = color;
+    this.position = new THREE.Vector3();
+    this.quaternion = new THREE.Quaternion();
+    this.targetPos = new THREE.Vector3();
+    this.targetQuat = new THREE.Quaternion();
+    this.smokeOn = true;
+    this.smoke = []; // pooled smoke meshes
+    this.smokeTimer = 0;
+    this.scriptOverride = null; // function(plane, mt, mod_t) for special modules
+    this.group = new THREE.Group();
+    scene.add(this.group);
+  }
+  setMesh(template) {
+    const m = template.clone(true);
+    m.traverse(c => {
+      if (c.isMesh) {
+        c.castShadow = true;
+        // Tint material
+        if (c.material) {
+          const mat = c.material.clone();
+          if (mat.color) {
+            const tint = new THREE.Color(this.color);
+            mat.color.lerp(tint, 0.55);
+            if (mat.emissive) mat.emissive.copy(tint).multiplyScalar(0.05);
+          }
+          c.material = mat;
+        }
+      }
+    });
+    this.group.add(m);
+  }
+  apply() {
+    this.group.position.copy(this.position);
+    this.group.quaternion.copy(this.quaternion);
+  }
 }
-function setCard(card, on){if(card)card.classList.toggle('show', on);}
-function updFuelCard(t){
-  const tF = t - 268;
-  const visible = tF >= -2 && tF <= 6;
-  setCard(act.fuelCard, visible);
-  if(!visible){ act.fuelFlashed = false; return; }
-  // Animation phases of the lift-throw 737 fuel control switch:
-  //   tF < -1     : RUN, locked (skirt seated, toggle 0°)
-  //   tF ∈ [-1,0] : pilot grasps + lifts (skirt rises, "LIFT" arrow shows)
-  //   tF ∈ [0,0.4]: rapid pivot 0°→180° (toggle flips through the fence)
-  //   tF ∈ [0.4,1]: skirt resettles in CUTOFF position
-  //   tF > 1      : CUTOFF, locked (toggle at 180°, skirt seated)
-  // 4-phase mushroom-head fuel-switch animation:
-  //   Phase 1  (tF < -1)        : RUN — points 2 o'clock (60°), normal length
-  //   Phase 2  (tF -1..-0.4)    : PULL OUT — extends 0→6px, still 60°
-  //   Phase 3  (tF -0.4..+0.4)  : ROTATE — held extended, sweeps 60°→120°
-  //   Phase 4  (tF +0.4..+1)    : SETTLE — retracts 6→0px, locks at 120°,
-  //                               red X-mark fades in (engine off indicator)
-  //   Stable   (tF > +1)        : CUTOFF · LOCKED, X visible, red light on
-  let togDeg = 60;
-  let skirtY = 0;
-  let ext = 0;          // stem extension in px (0 = retracted, 6 = fully out)
-  let handOn = false;
-  let status, statusColor;
-  if (tF < -1) {
-    status = 'RUN · 2点钟 LOCKED'; statusColor = '#9bd09b';
-  } else if (tF < -0.4) {
-    const p = (tF + 1) / 0.6;
-    ext = 6 * p;
-    skirtY = -3 * p;
-    handOn = true;
-    status = 'PULL OUT · 拔出'; statusColor = '#ffaa44';
-  } else if (tF < 0.4) {
-    const p = (tF + 0.4) / 0.8;
-    togDeg = 60 + 60 * p;          // 60° → 120° (CW swing through 3 o'clock fence)
-    ext = 6;
-    skirtY = -3;
-    handOn = true;
-    status = 'ROTATE 2点 → 4点 · 旋转'; statusColor = '#ff4444';
-    if (!act.fuelFlashed && tF >= 0) { flashEl(act.fuelSvg, 'flash-red'); act.fuelFlashed = true; }
-  } else if (tF < 1) {
-    const p = (tF - 0.4) / 0.6;
-    togDeg = 120;
-    ext = 6 * (1 - p);             // retract 6 → 0
-    skirtY = -3 * (1 - p);
-    status = 'SEAT · CUTOFF 4点钟 切断'; statusColor = '#ff5555';
+
+function buildFleet(n) {
+  // Clean up old
+  for (const p of planes) {
+    scene.remove(p.group);
+    p.smoke.forEach(s => { scene.remove(s); s.material.dispose(); });
+  }
+  planes.length = 0;
+  for (let i=0;i<n;i++) {
+    const c = PLANE_COLORS[i % PLANE_COLORS.length];
+    const p = new Plane(i, c);
+    if (planeTemplate) p.setMesh(planeTemplate);
+    else {
+      // Fallback proxy
+      const fb = makeFallbackPlane(c);
+      p.group.add(fb);
+    }
+    planes.push(p);
+  }
+}
+
+function makeFallbackPlane(color) {
+  const g = new THREE.Group();
+  const wm = new THREE.MeshStandardMaterial({color, roughness:0.4, metalness:0.5});
+  const fp = [];
+  for (let i=0;i<=40;i++){const t=i/40,x=(t-0.5)*8;let r=0.7;if(t<0.15)r*=Math.sqrt(1-((0.15-t)/0.15)**2);else if(t>0.85)r*=(1-((t-0.85)/0.15)**1.5);fp.push(new THREE.Vector2(r,x));}
+  const fg = new THREE.LatheGeometry(fp, 16); fg.rotateX(Math.PI/2);
+  const fus = new THREE.Mesh(fg, wm); g.add(fus);
+  const wing = new THREE.Mesh(new THREE.BoxGeometry(8, 0.15, 1.6), wm); wing.position.y = -0.1; g.add(wing);
+  const tail = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.08, 0.7), wm); tail.position.set(0, 0.2, 3.4); g.add(tail);
+  const fin  = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.4, 1.2), wm); fin.position.set(0, 0.7, 3.4); g.add(fin);
+  g.traverse(c => { if (c.isMesh) c.castShadow = true; });
+  return g;
+}
+
+// Load plane template
+new GLTFLoader().load('b738.glb', gltf => {
+  const m = gltf.scene;
+  const b1 = new THREE.Box3().setFromObject(m);
+  const sz = b1.getSize(new THREE.Vector3());
+  const max = Math.max(sz.x, sz.y, sz.z);
+  m.scale.setScalar(7.5 / max);
+  const b2 = new THREE.Box3().setFromObject(m);
+  m.position.sub(b2.getCenter(new THREE.Vector3()));
+  planeTemplate = m;
+  // re-skin existing planes
+  for (const p of planes) {
+    p.group.clear();
+    p.setMesh(planeTemplate);
+  }
+}, undefined, () => {/* fallback already in place */});
+
+// ---------- Smoke trails (per plane) ----------
+const smokeGeo = new THREE.PlaneGeometry(2.4, 2.4);
+function spawnSmoke(p, dt) {
+  if (!p.smokeOn) return;
+  p.smokeTimer += dt;
+  if (p.smokeTimer < 0.05) return;
+  p.smokeTimer = 0;
+  const mat = new THREE.MeshBasicMaterial({color: p.color, transparent:true, opacity:0.85, depthWrite:false});
+  const s = new THREE.Mesh(smokeGeo, mat);
+  const back = new THREE.Vector3(0, -0.3, 4).applyQuaternion(p.quaternion);
+  s.position.copy(p.position).add(back);
+  s.userData = {life:2.4, scale:1};
+  scene.add(s);
+  p.smoke.push(s);
+  if (p.smoke.length > 110) {
+    const old = p.smoke.shift();
+    scene.remove(old);
+    old.material.dispose();
+  }
+}
+function updateSmoke(p, dt) {
+  for (let i=p.smoke.length-1;i>=0;i--) {
+    const s = p.smoke[i];
+    s.userData.life -= dt;
+    s.userData.scale += dt*7;
+    s.scale.setScalar(s.userData.scale);
+    s.material.opacity = Math.max(0, s.userData.life/2.4)*0.85;
+    s.lookAt(camera.position);
+    if (s.userData.life <= 0) {
+      scene.remove(s);
+      s.material.dispose();
+      p.smoke.splice(i,1);
+    }
+  }
+}
+
+// ---------- Leader "virtual" state ----------
+// We treat plane[0] as the formation leader.
+// Followers compute their target each frame:
+//   targetPos = leader.position + offset(formation, n, i).applyQuat(leader.quaternion)
+//   targetQuat = leader.quaternion (with module-specific tweaks like banking on turns)
+// Each plane lerps toward target with smooth pursuit.
+//
+// The leader's trajectory is generated by the active module.
+
+const sim = {
+  time: 0,
+  totalTime: 0,
+  speed: 1,
+  playing: false,
+  curIdx: -1,
+  formationFrom: 'TRAIL',
+  formationTo: 'TRAIL',
+  formationT: 1, // 0..1 morph progress
+  formationStart: 0, // module-time when morph started
+  burstScripts: null,
+  pendingRegroup: null,
+  cam: 'auto',
+};
+
+// Heading the leader is currently flying toward (yaw around Y, with pitch and roll for maneuvers)
+// We maintain explicit Euler angles for simplicity, then build quaternion.
+const leaderState = {
+  pos: new THREE.Vector3(0, 5, 700),  // start at runway threshold
+  yaw: Math.PI,         // pointing toward -Z (north of runway). Yaw=0 means +Z. We'll define yaw=π as -Z.
+  pitch: 0, roll: 0,
+  speed: 0,
+};
+
+function leaderQuat() {
+  return new THREE.Quaternion().setFromEuler(new THREE.Euler(leaderState.pitch, leaderState.yaw, leaderState.roll, 'YXZ'));
+}
+function leaderForward() {
+  return new THREE.Vector3(0,0,-1).applyQuaternion(leaderQuat());
+}
+
+function resetSim() {
+  sim.time = 0;
+  sim.curIdx = -1;
+  sim.formationFrom = plan.team.initialFormation;
+  sim.formationTo = plan.team.initialFormation;
+  sim.formationT = 1;
+  sim.burstScripts = null;
+  sim.pendingRegroup = null;
+
+  leaderState.pos.set(0, 5, 700);
+  leaderState.yaw = Math.PI; // facing -Z (toward show area)
+  leaderState.pitch = 0;
+  leaderState.roll = 0;
+  leaderState.speed = 0;
+
+  buildFleet(plan.team.size);
+  // Initial positions: place planes in initial formation on runway, but spread along runway behind leader
+  for (let i=0;i<planes.length;i++) {
+    const off = formationOffset('TRAIL', planes.length, i);
+    const wp = off.clone().applyQuaternion(leaderQuat());
+    const p = planes[i];
+    p.position.copy(leaderState.pos).add(wp);
+    p.position.y = 5;
+    p.quaternion.copy(leaderQuat());
+    p.targetPos.copy(p.position);
+    p.targetQuat.copy(p.quaternion);
+    p.apply();
+  }
+}
+
+// ---------- Module behaviors ----------
+// Each module function gets (mod, mt, dur, dt). mt = time within module (sec). dur = duration.
+// They must update leaderState (and sometimes set scriptOverride per plane for special cases).
+
+function clamp01(x){return x<0?0:x>1?1:x;}
+function easeInOut(t){t=clamp01(t);return t<0.5?2*t*t:1-Math.pow(-2*t+2,2)/2;}
+function easeOut(t){t=clamp01(t);return 1-Math.pow(1-t,2);}
+function easeIn(t){t=clamp01(t);return t*t;}
+
+function moveLeaderForward(dt, targetSpeed, accel = 30) {
+  // Adjust speed
+  const ds = Math.sign(targetSpeed - leaderState.speed) * Math.min(Math.abs(targetSpeed - leaderState.speed), accel*dt);
+  leaderState.speed += ds;
+  const f = leaderForward();
+  leaderState.pos.addScaledVector(f, leaderState.speed * dt);
+}
+
+function approach(cur, target, rate, dt) {
+  const d = target - cur;
+  if (Math.abs(d) < 1e-6) return target;
+  const step = Math.sign(d) * Math.min(Math.abs(d), rate * dt);
+  return cur + step;
+}
+
+function MOD_TAKEOFF(mod, mt, dur, dt) {
+  const t = mt/dur;
+  // Phase 1: roll, 0..0.45 — accelerate from 0 to ~85 at runway level
+  // Phase 2: rotate, 0.45..0.6 — pitch up, lift off
+  // Phase 3: climb, 0.6..1 — climb to plan.alt.cruise * 0.5 (initial low climb)
+  if (t < 0.45) {
+    const p = t/0.45;
+    leaderState.pitch = 0;
+    leaderState.roll = 0;
+    leaderState.speed = 90 * p;
+    leaderState.pos.y = 5;
+  } else if (t < 0.62) {
+    const p = (t-0.45)/0.17;
+    leaderState.pitch = -0.22 * p; // nose up = negative pitch in YXZ Euler? Need to check sign.
+    leaderState.speed = approach(leaderState.speed, 95, 30, dt);
+    leaderState.pos.y = 5 + p*p * 25;
   } else {
-    togDeg = 120;
-    status = 'ENG 1 + 2 · CUTOFF · 双发熄火'; statusColor = '#ff5555';
+    const p = (t-0.62)/0.38;
+    leaderState.pitch = -0.18 + p*0.14; // gradually level
+    leaderState.speed = approach(leaderState.speed, 110, 25, dt);
+    const targetAlt = plan.alt.cruise;
+    leaderState.pos.y += (targetAlt - leaderState.pos.y) * 0.6 * dt;
   }
-  // Red X mark only appears as the lever retracts in phase 4 (engine confirmed off)
-  let xOpacity = 0;
-  if (togDeg > 100) xOpacity = Math.max(0, Math.min(1, 1 - ext / 6));
-  // Apply stem extension: stem grows up, head group translates up by same amount
-  if (act.fuel1Stem) {
-    act.fuel1Stem.setAttribute('y', (-15 - ext).toFixed(1));
-    act.fuel1Stem.setAttribute('height', (15 + ext).toFixed(1));
-    act.fuel2Stem.setAttribute('y', (-15 - ext).toFixed(1));
-    act.fuel2Stem.setAttribute('height', (15 + ext).toFixed(1));
-    act.fuel1Head.setAttribute('transform', 'translate(0,' + (-ext).toFixed(1) + ')');
-    act.fuel2Head.setAttribute('transform', 'translate(0,' + (-ext).toFixed(1) + ')');
-  }
-  const x1 = document.getElementById('fsw-1-x');
-  const x2 = document.getElementById('fsw-2-x');
-  if (x1) x1.style.opacity = xOpacity.toFixed(2);
-  if (x2) x2.style.opacity = xOpacity.toFixed(2);
-  act.fuel1Tog.setAttribute('transform', 'rotate(' + togDeg.toFixed(1) + ')');
-  act.fuel2Tog.setAttribute('transform', 'rotate(' + togDeg.toFixed(1) + ')');
-  act.fuel1Skirt.setAttribute('transform', 'translate(0,' + skirtY.toFixed(1) + ')');
-  act.fuel2Skirt.setAttribute('transform', 'translate(0,' + skirtY.toFixed(1) + ')');
-  // Skirt color: red+highlight while moving, dim red while locked
-  const sk1 = act.fuel1Skirt.querySelectorAll('.fsw-skirt-run, .fsw-skirt-active');
-  const sk2 = act.fuel2Skirt.querySelectorAll('.fsw-skirt-run, .fsw-skirt-active');
-  const skClass = (handOn || skirtY < 0) ? 'fsw-skirt-active' : 'fsw-skirt-run';
-  sk1.forEach(e=>e.setAttribute('class', skClass));
-  sk2.forEach(e=>e.setAttribute('class', skClass));
-  act.fuel1Hand.classList.toggle('show', handOn);
-  act.fuel2Hand.classList.toggle('show', handOn);
-  act.fuelStatus.textContent = status;
-  act.fuelStatus.style.color = statusColor;
-}
-function updApCard(t){
-  const tF = t - 268;
-  const visible = tF >= 1 && tF <= 8;
-  setCard(act.apCard, visible);
-  if(!visible){ act.apFlashed = false; return; }
-  const warn = tF >= 3;
-  act.apLight1.setAttribute('class', warn ? 'ap-light warn' : 'ap-light');
-  act.apLight2.setAttribute('class', warn ? 'ap-light warn' : 'ap-light');
-  if (warn) {
-    act.apStatus.textContent = 'AP-1+AP-2 DISCONNECT · 自驾断开';
-    act.apStatus.style.color = '#ff5544';
-    if (!act.apFlashed) { flashEl(act.apSvg, 'flash-red'); act.apFlashed = true; }
-  } else {
-    act.apStatus.textContent = 'AP ENGAGED';
-    act.apStatus.style.color = '#9bd09b';
-  }
+  // advance forward
+  const f = leaderForward();
+  leaderState.pos.addScaledVector(f, leaderState.speed * dt);
+  sim.formationTo = plan.team.initialFormation;
+  sim.formationFrom = plan.team.initialFormation;
+  sim.formationT = 1;
 }
 
-// Mechanical position (both yokes physically linked → identical):
-//   Whl Pos per FDR Fig 12: ramps to full-left, then HOLDS — does NOT
-//   return to 0 (FDR shows sustained left input until power loss).
-//   Col Pos: ramps to push, then sudden EXTRA push at the very end
-//   (FDR Fig 12 elevator goes hard-down in the final ~2s).
-function _whlDeg(tF){
-  if      (tF <  3)  return 0;
-  if      (tF <  7)  return -90 * ((tF - 3) / 4);   // ramp 0 → -90°
-  // Held at -90° from T+7 onward — no return-to-centre. Slight relaxation
-  // from -90° to -75° in the recovery window 11..18, then back to -90°
-  // in the final extreme phase.
-  if      (tF < 11)  return -90;
-  if      (tF < 18)  return -90 + 15 * ((tF - 11) / 7);   // -90° → -75°
-  return -90;                                             // back to full left
+function MOD_CLIMB(mod, mt, dur, dt) {
+  const target = mod.target ?? plan.alt.cruise;
+  const dy = target - leaderState.pos.y;
+  const climbRate = Math.sign(dy) * Math.min(Math.abs(dy)/3, 25);
+  // pitch reflects climb angle
+  const horizSpd = Math.max(50, leaderState.speed);
+  const pitch = -Math.atan2(climbRate, horizSpd);
+  leaderState.pitch = approach(leaderState.pitch, pitch, 0.6, dt);
+  leaderState.roll = approach(leaderState.roll, 0, 1, dt);
+  leaderState.pos.y += climbRate * dt;
+  moveLeaderForward(dt, plan.speed.cruise);
 }
-function _colPushPx(tF){
-  // Push the wheel DOWN (forward column input). Smoothstep ramp to ~18px,
-  // then a sharp extra push at T+18 onwards to mimic the FDR-recorded
-  // "final hard push" / elevator-down deflection in the last seconds.
-  if (tF < 5) return 0;
-  const p = Math.max(0, Math.min(1, (tF - 5) / 13));     // ramp over 5..18
-  const ease = p * p * (3 - 2 * p);
-  let push = 18 * ease;
-  if (tF >= 18) push = 18 + Math.min(8, (tF - 18) * 2.5); // extra hard push
-  return push;
+
+function MOD_CRUISE(mod, mt, dur, dt) {
+  leaderState.pitch = approach(leaderState.pitch, 0, 0.6, dt);
+  leaderState.roll = approach(leaderState.roll, 0, 1, dt);
+  const targetAlt = mod.altitude ?? plan.alt.cruise;
+  leaderState.pos.y += (targetAlt - leaderState.pos.y) * 0.4 * dt;
+  moveLeaderForward(dt, plan.speed.cruise);
 }
-// Per-pilot FORCE profiles. Strict to NTSB Fig 13 observable patterns:
-//   - Both Local + Foreign forces non-zero throughout the upset
-//     (definitive dual-input signature)
-//   - Magnitudes differ (one side dominant)
-//   - Direction is predominantly the SAME (both pushing forward, both
-//     applying same-direction roll force) — the "inconsistency" lies
-//     in magnitude, not direction
-// We do NOT fabricate opposing-direction moments (those would be visual
-// drama, not faithful to what the public figure actually shows).
-function _capRollForce(tF){
-  // Captain (dominant): sustained left roll force throughout (no easing).
-  if (tF < 3) return 0;
-  if (tF < 7) return -(tF - 3) / 4;
-  return -1;                                  // hold full left until end
+
+function MOD_FORMATION_CHANGE(mod, mt, dur, dt) {
+  // Set up morph on entry
+  if (sim.formationTo !== mod.target) {
+    sim.formationFrom = sim.formationTo;
+    sim.formationTo = mod.target;
+    sim.formationT = 0;
+  }
+  sim.formationT = Math.min(1, mt / dur);
+  // Cruise meanwhile
+  MOD_CRUISE(mod, mt, dur, dt);
 }
-function _capPitchForce(tF){
-  // Captain: sustained forward push, with EXTRA "final hard push" at T+18+
-  // matching the FDR-recorded sudden elevator-down at the end.
-  if (tF < 5) return 0;
-  if (tF < 11) return -(tF - 5) / 6;
-  if (tF < 18) return -1;
-  return -1.25;                               // beyond -1 to convey "all the way"
+
+function MOD_LOOP(mod, mt, dur, dt) {
+  // Vertical loop: pitch rate so 2π over duration
+  const pitchRate = -2*Math.PI / dur; // negative pitch in YXZ Euler = nose up
+  leaderState.pitch += pitchRate * dt;
+  // wrap
+  if (leaderState.pitch < -Math.PI) leaderState.pitch += 2*Math.PI;
+  if (leaderState.pitch >  Math.PI) leaderState.pitch -= 2*Math.PI;
+  leaderState.roll = approach(leaderState.roll, 0, 2, dt);
+  // speed varies through loop
+  const t = mt/dur;
+  const spd = plan.speed.cruise + Math.sin(t*Math.PI*2 + Math.PI/2) * 20; // slowest at top
+  leaderState.speed = approach(leaderState.speed, spd, 25, dt);
+  const f = leaderForward();
+  leaderState.pos.addScaledVector(f, leaderState.speed * dt);
 }
-function _foRollForce(tF){
-  // F/O: same direction as Captain, ~50% magnitude, sustained.
-  if (tF < 3) return 0;
-  if (tF < 7) return -0.5 * (tF - 3) / 4;
-  return -0.5;
+
+function MOD_BARREL_ROLL(mod, mt, dur, dt) {
+  // Slow roll: rotate around forward axis 2π over duration
+  const rollRate = 2*Math.PI / dur;
+  leaderState.roll += rollRate * dt;
+  if (leaderState.roll > Math.PI) leaderState.roll -= 2*Math.PI;
+  // hold pitch near level (with slight oscillation for barrel feel)
+  leaderState.pitch = approach(leaderState.pitch, -0.05, 1, dt);
+  moveLeaderForward(dt, plan.speed.cruise + 10);
 }
-function _foPitchForce(tF){
-  // F/O: same direction (push), smaller magnitude, also peaks at the end.
-  if (tF < 5) return 0;
-  if (tF < 11) return -0.55 * (tF - 5) / 6;
-  if (tF < 18) return -0.55;
-  return -0.75;                               // smaller final push
+
+function MOD_BOMB_BURST(mod, mt, dur, dt) {
+  const t = mt/dur;
+  // First 30%: leader pulls up
+  if (t < 0.35) {
+    leaderState.pitch = approach(leaderState.pitch, -1.0, 1.5, dt);
+  } else {
+    leaderState.pitch = approach(leaderState.pitch, -0.5, 1.0, dt);
+  }
+  leaderState.roll = approach(leaderState.roll, 0, 1, dt);
+  moveLeaderForward(dt, plan.speed.cruise - 15);
+
+  // Set per-plane scripts for divergence
+  if (!sim.burstScripts) {
+    sim.burstScripts = [];
+    const n = planes.length;
+    for (let i=0;i<n;i++) {
+      const ang = (i/n)*Math.PI*2 + Math.PI/2;
+      sim.burstScripts.push({
+        ang,
+        // each plane gets its own pitch/roll/dir
+        rate: 1.5 + Math.random()*0.6,
+      });
+    }
+  }
+  // Per-plane override applied in main update via sim.burstScripts
 }
-// Render one yoke with shared mechanical state + own (per-pilot) force vectors.
-// Force ARC width / arrow LENGTH scales with force magnitude — that's how the
-// Captain-vs-F/O magnitude difference becomes visible (the inconsistency).
-function _updYoke(card, tiltG, rotG, statusEl, rollArc, rollTip, pitchArc, pitchTip,
-                  tF, whlDeg, pushPx, rollForce, pitchForce, sideClass){
-  // Yoke is FDR-only data: shown ONLY while FDR is recording input.
-  //   T+0  : engine cutoff (FDR start of upset)
-  //   T+22 : FDR power loss → no further input data, hide
-  // No speculation past FDR end. (User: "不要加戏，只还原真相")
-  const visible = tF >= 1 && tF <= 22;
-  setCard(card, visible);
-  if(!visible) return;
-  // Mechanical position (identical on both yokes — physically linked):
-  //   pushPx > 0 → wheel translates DOWN (push); < 0 → UP (pull)
-  //   whlDeg → wheel rotates around its own centre (roll)
-  tiltG.setAttribute('transform', 'translate(0, ' + pushPx.toFixed(1) + ')');
-  rotG.setAttribute('transform', 'translate(80,80) rotate(' + whlDeg.toFixed(1) + ')');
-  rotG.classList.toggle('yk-active', tF >= 3);
-  // Roll force arc — magnitude controls horizontal span (longer arc = more force)
-  const absR = Math.abs(rollForce);
-  const showR = absR > 0.05;
-  if (showR) {
-    const halfSpan = 12 + 24 * absR;
-    const cx = 80;
-    const archHeight = 18 + 7 * absR;
-    const yArc = 60;
-    const x1 = cx + (rollForce < 0 ? halfSpan : -halfSpan);
-    const x2 = cx + (rollForce < 0 ? -halfSpan : halfSpan);
-    rollArc.setAttribute('d', 'M ' + x1 + ' ' + yArc + ' Q ' + cx + ' ' + (yArc - archHeight) + ' ' + x2 + ' ' + yArc);
-    if (rollForce < 0) {
-      rollTip.setAttribute('points', x2+','+yArc+' '+(x2+6)+','+(yArc-6)+' '+(x2+8)+','+(yArc+4));
+
+function MOD_REGROUP(mod, mt, dur, dt) {
+  // Cruise level; reform to mod.formation from BURST_RING
+  if (sim.burstScripts) {
+    sim.formationFrom = 'BURST_RING';
+    sim.formationTo = mod.formation || 'V';
+    sim.formationT = 0;
+    sim.burstScripts = null;
+  }
+  sim.formationT = Math.min(1, mt / dur);
+  MOD_CRUISE(mod, mt, dur, dt);
+}
+
+function MOD_MIRROR_PASS(mod, mt, dur, dt) {
+  // Split into two halves which fly opposite directions then reconverge
+  // Phase 1: split (0-0.4): two sub-leaders diverge along ±X
+  // Phase 2: pass (0.4-0.6): smoke crossover
+  // Phase 3: regroup (0.6-1)
+  const t = mt/dur;
+  // Leader cruises straight
+  leaderState.pitch = approach(leaderState.pitch, 0, 1, dt);
+  leaderState.roll = approach(leaderState.roll, 0, 1, dt);
+  moveLeaderForward(dt, plan.speed.cruise);
+
+  // Override per-plane: half left, half right, mirrored
+  // We'll set override flag and compute in main update
+  sim.mirrorPhase = t;
+}
+
+function MOD_LOW_PASS(mod, mt, dur, dt) {
+  const targetAlt = 80;
+  const dy = targetAlt - leaderState.pos.y;
+  leaderState.pos.y += dy * 0.6 * dt;
+  const horizSpd = Math.max(50, leaderState.speed);
+  const pitch = -Math.atan2(dy>0?15:-15, horizSpd);
+  leaderState.pitch = approach(leaderState.pitch, Math.abs(dy)<10?0:pitch*0.4, 0.8, dt);
+  leaderState.roll = approach(leaderState.roll, 0, 1, dt);
+  moveLeaderForward(dt, plan.speed.cruise + 20);
+}
+
+function MOD_HIGH_PASS(mod, mt, dur, dt) {
+  const targetAlt = plan.alt.max;
+  const dy = targetAlt - leaderState.pos.y;
+  leaderState.pos.y += dy * 0.5 * dt;
+  leaderState.pitch = approach(leaderState.pitch, dy>20?-0.18:0, 0.8, dt);
+  leaderState.roll = approach(leaderState.roll, 0, 1, dt);
+  moveLeaderForward(dt, plan.speed.cruise);
+}
+
+function MOD_BREAK_LANDING(mod, mt, dur, dt) {
+  const t = mt/dur;
+  // Phase 1: descend to pattern altitude (200m) and turn back toward runway
+  // For simplicity: turn 180° around to face runway approach (yaw = 0 means +Z, runway is along Z, approach from +Z toward -Z is yaw=π already, so we approach with current yaw... but we may have drifted). Just do a long descending approach.
+  // Phase 2 (per-plane peel-off): each plane peels off at staggered times, glides, touches down.
+
+  // Leader behavior: glide path descent
+  if (t < 0.7) {
+    // descend
+    const targetAlt = Math.max(20, plan.alt.cruise * (1 - t/0.7));
+    leaderState.pos.y += (targetAlt - leaderState.pos.y) * 0.6 * dt;
+    leaderState.pitch = approach(leaderState.pitch, 0.06, 0.5, dt);
+    leaderState.roll = approach(leaderState.roll, 0, 1, dt);
+    moveLeaderForward(dt, plan.speed.cruise * (1 - t*0.4));
+  } else {
+    // touch down
+    leaderState.pos.y = Math.max(5, leaderState.pos.y - 8*dt);
+    leaderState.pitch = approach(leaderState.pitch, 0, 1, dt);
+    leaderState.roll = 0;
+    moveLeaderForward(dt, Math.max(20, leaderState.speed - 25*dt));
+  }
+  sim.formationTo = 'TRAIL';
+  sim.formationFrom = 'TRAIL';
+  sim.formationT = 1;
+  sim.landingPhase = t;
+}
+
+const MODULE_FN = {
+  TAKEOFF: MOD_TAKEOFF,
+  CLIMB: MOD_CLIMB,
+  CRUISE: MOD_CRUISE,
+  FORMATION_CHANGE: MOD_FORMATION_CHANGE,
+  LOOP: MOD_LOOP,
+  BARREL_ROLL: MOD_BARREL_ROLL,
+  BOMB_BURST: MOD_BOMB_BURST,
+  REGROUP: MOD_REGROUP,
+  MIRROR_PASS: MOD_MIRROR_PASS,
+  LOW_PASS: MOD_LOW_PASS,
+  HIGH_PASS: MOD_HIGH_PASS,
+  BREAK_LANDING: MOD_BREAK_LANDING,
+};
+
+// ---------- Per-frame plane target computation ----------
+function updatePlaneTargets(dt, mod, mt) {
+  const n = planes.length;
+  const lq = leaderQuat();
+  const lp = leaderState.pos.clone();
+
+  const fromOff = (i) => formationOffset(sim.formationFrom, n, i);
+  const toOff   = (i) => formationOffset(sim.formationTo,   n, i);
+  const morphT  = easeInOut(sim.formationT);
+
+  for (let i=0;i<n;i++) {
+    const p = planes[i];
+    let off;
+    if (mod && mod.type === 'BOMB_BURST' && sim.burstScripts) {
+      // Diverge radially from leader, accumulate position via offset that grows with time
+      const sc = sim.burstScripts[i];
+      const t = mt / mod.duration;
+      const dist = 12 + t*120 * sc.rate;
+      const x = Math.cos(sc.ang) * dist;
+      const y = Math.sin(sc.ang) * dist;
+      const z = -t * 30 * sc.rate; // slight forward
+      off = new THREE.Vector3(x, y, z);
+    } else if (mod && mod.type === 'MIRROR_PASS') {
+      const t = sim.mirrorPhase ?? 0;
+      // Half left, half right
+      const half = Math.floor(n/2);
+      const side = i < half ? -1 : 1;
+      const subIdx = i < half ? i : i - half;
+      const subN = i < half ? half : (n - half);
+      // base offset within sub-formation (V)
+      const subOff = FORMATIONS.V(subN, subIdx);
+      // Lateral split distance
+      let split = 0;
+      if (t < 0.4) split = (t/0.4) * 80;
+      else if (t < 0.6) split = 80 - ((t-0.4)/0.2)*160; // pass through (cross zero)
+      else split = -80 + ((t-0.6)/0.4)*80; // converge to 0
+      off = new THREE.Vector3(side * (40 + Math.abs(split)) + subOff.x, 0, subOff.z);
+      if (t > 0.4 && t < 0.6) off.x = side * split * -1; // mirror crossing
+    } else if (mod && mod.type === 'BREAK_LANDING') {
+      // each plane peels off at staggered intervals; fall behind leader and descend faster
+      const offset = formationOffset('TRAIL', n, i);
+      const peelStart = 0.05 + i * 0.10; // each plane peels at this fraction
+      const t = sim.landingPhase ?? 0;
+      const own = clamp01((t - peelStart) / 0.15);
+      // Lateral peel to crowd-side (negative X) increasing with own
+      off = offset.clone();
+      off.x -= own * 25;
+      // Add extra trailing distance for staggered touchdown
+      off.z += own * 80;
     } else {
-      rollTip.setAttribute('points', x2+','+yArc+' '+(x2-6)+','+(yArc-6)+' '+(x2-8)+','+(yArc+4));
+      // Smooth morph between formations
+      const a = fromOff(i);
+      const b = toOff(i);
+      off = a.clone().lerp(b, morphT);
+    }
+
+    // Convert to world frame
+    const wp = off.clone().applyQuaternion(lq);
+    p.targetPos.copy(lp).add(wp);
+
+    // Special behavior for landing: drop to runway during peel
+    if (mod && mod.type === 'BREAK_LANDING') {
+      const t = sim.landingPhase ?? 0;
+      const peelStart = 0.05 + i * 0.10;
+      const own = clamp01((t - peelStart) / 0.45);
+      p.targetPos.y = Math.max(5, p.targetPos.y * (1-own) + 5*own);
+    }
+
+    // Target orientation: leader's, with bank into turns and module-specific tweaks
+    p.targetQuat.copy(lq);
+
+    // For burst: face outward
+    if (mod && mod.type === 'BOMB_BURST' && sim.burstScripts) {
+      const sc = sim.burstScripts[i];
+      const t = mt / mod.duration;
+      // Face along the divergence direction: yaw = leaderYaw, with extra pitch up + roll outward
+      const e = new THREE.Euler(
+        leaderState.pitch - 0.5 + Math.sin(sc.ang)*0.3*t,
+        leaderState.yaw,
+        leaderState.roll + Math.cos(sc.ang)*0.4*t,
+        'YXZ'
+      );
+      p.targetQuat.setFromEuler(e);
     }
   }
-  rollArc.classList.toggle('show', showR);
-  rollTip.classList.toggle('show', showR);
-  // Pitch force — vertical arrow on the OUTER side of the wheel.
-  // Pilot POV: push force points DOWN (wheel goes down); pull points UP.
-  const absP = Math.abs(pitchForce);
-  const showP = absP > 0.05;
-  if (showP) {
-    const x = (sideClass === 'cap') ? 130 : 30;
-    const len = 14 + 24 * absP;
-    const yMid = 82;
-    const yStart = yMid - len/2;
-    const yEnd   = yMid + len/2;
-    if (pitchForce < 0) {                     // push: arrow points DOWN
-      pitchArc.setAttribute('x1', x); pitchArc.setAttribute('y1', yStart);
-      pitchArc.setAttribute('x2', x); pitchArc.setAttribute('y2', yEnd);
-      pitchTip.setAttribute('points', x+','+yEnd+' '+(x-5)+','+(yEnd-7)+' '+(x+5)+','+(yEnd-7));
-    } else {                                  // pull: arrow points UP
-      pitchArc.setAttribute('x1', x); pitchArc.setAttribute('y1', yEnd);
-      pitchArc.setAttribute('x2', x); pitchArc.setAttribute('y2', yStart);
-      pitchTip.setAttribute('points', x+','+yStart+' '+(x-5)+','+(yStart+7)+' '+(x+5)+','+(yStart+7));
+}
+
+// ---------- Main loop ----------
+let lastT = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - lastT) / 1000) * sim.speed;
+  lastT = now;
+
+  if (sim.playing && sim.time < sim.totalTime) {
+    advanceSim(dt);
+  }
+
+  // Smooth pursuit: lerp planes toward target
+  const followK = 1 - Math.exp(-6 * dt);
+  const turnK   = 1 - Math.exp(-5 * dt);
+  for (const p of planes) {
+    p.position.lerp(p.targetPos, followK);
+    p.quaternion.slerp(p.targetQuat, turnK);
+    p.apply();
+    spawnSmoke(p, dt);
+    updateSmoke(p, dt);
+  }
+
+  // Camera
+  updateCamera(dt);
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+function advanceSim(dt) {
+  sim.time += dt;
+  if (sim.time > sim.totalTime) sim.time = sim.totalTime;
+
+  // Find current module
+  let idx = -1;
+  for (let i=0;i<plan.modules.length;i++) {
+    if (sim.time >= plan.modules[i].start && sim.time < plan.modules[i].end) {
+      idx = i; break;
     }
   }
-  pitchArc.classList.toggle('show', showP);
-  pitchTip.classList.toggle('show', showP);
-  // Status line: direction + relative magnitude (no fabricated FIGHTING text)
-  const rollDir = rollForce < -0.1 ? '◀ LEFT' : rollForce > 0.1 ? 'RIGHT ▶' : '—';
-  const pitchDir = pitchForce < -0.1 ? '▼ PUSH' : pitchForce > 0.1 ? '▲ PULL' : '—';
-  const mag = Math.max(absR, absP);
-  const magTag = mag > 0.7 ? ' (HIGH)' : mag > 0.3 ? ' (MED)' : mag > 0.05 ? ' (LOW)' : '';
-  statusEl.textContent = rollDir + ' / ' + pitchDir + magTag;
-}
-function updYokeCards(t){
-  const tF = t - 268;
-  const whlDeg = _whlDeg(tF);
-  const pushPx = _colPushPx(tF);
-  const cR = _capRollForce(tF), cP = _capPitchForce(tF);
-  const fR = _foRollForce(tF),  fP = _foPitchForce(tF);
-  _updYoke(act.yokeLCard, act.yokeLTilt, act.yokeLRot, act.yokeLStatus,
-           act.ykLRollArc, act.ykLRollTip, act.ykLPitchArc, act.ykLPitchTip,
-           tF, whlDeg, pushPx, cR, cP, 'cap');
-  _updYoke(act.yokeRCard, act.yokeRTilt, act.yokeRRot, act.yokeRStatus,
-           act.ykRRollArc, act.ykRRollTip, act.ykRPitchArc, act.ykRPitchTip,
-           tF, whlDeg, pushPx, fR, fP, 'fo');
-  // Central badge: DUAL INPUT only (no fabricated FIGHTING upgrade — opposing
-  // direction moments are not clearly visible in the public NTSB figure).
-  // Visible only while FDR records dual-input force (T+3..T+22).
-  setCard(act.dualCard, tF >= 3 && tF <= 22);
-}
+  if (idx < 0 && sim.time >= sim.totalTime) idx = plan.modules.length - 1;
+  if (idx < 0) idx = 0;
 
-// Surface deflection update — derived from yoke wheel position + column push.
-// Aileron deflection ∝ −Whl Pos (left wheel → left aileron UP / right aileron DOWN).
-// Elevator deflection ∝ −Col Push (column forward → elevator DOWN).
-// Rudder = 0° throughout (FDR Fig 12 untouched).
-function _setSurfBar(rect, valEl, deflectionDeg, halfMaxPx, halfMaxDeg, cx){
-  const clamped = Math.max(-halfMaxDeg, Math.min(halfMaxDeg, deflectionDeg));
-  const w = (Math.abs(clamped) / halfMaxDeg) * halfMaxPx;
-  rect.setAttribute('x', clamped >= 0 ? cx : (cx - w));
-  rect.setAttribute('width', w.toFixed(1));
-  rect.classList.toggle('up', clamped >= 0);
-  rect.classList.toggle('dn', clamped < 0);
-  const sign = clamped >= 0 ? '+' : '';
-  valEl.textContent = sign + clamped.toFixed(0) + '°';
-}
-function updSurfaceCard(t){
-  const tF = t - 268;
-  const visible = tF >= 1 && tF <= 22;
-  setCard(act.surfCard, visible);
-  if(!visible) return;
-  const whl = _whlDeg(tF);
-  const push = _colPushPx(tF);
-  // Wheel ±90° → aileron ±15° (typical 737 max aileron ≈ 20°).
-  const ailL = -whl / 6;          // left aileron (positive = trailing edge UP)
-  const ailR = whl / 6;           // right aileron (mirror)
-  // Column push → elevator down. push 0..26px → elev 0°..−25°.
-  const elev = -push * (25 / 26);
-  _setSurfBar(act.surfAilL, act.surfAilLVal, ailL, 40, 20, 78);
-  _setSurfBar(act.surfAilR, act.surfAilRVal, ailR, 40, 20, 78);
-  _setSurfBar(act.surfElev, act.surfElevVal, elev, 30, 25, 220);
-  // Flash elevator at the sudden final deflection (T+18+ phase) and reveal
-  // the "← 推杆 PUSH ↓" callout that explicitly links elev-down to column push.
-  const elevExtreme = tF >= 18 && elev < -15;
-  act.surfElev.classList.toggle('flash', elevExtreme);
-  if (act.surfElevCause) act.surfElevCause.style.opacity = elevExtreme ? '1' : '0';
-  let s, c = '#ffd4a8';
-  if      (tF < 3)  { s = 'AP ENGAGED · all surfaces neutral 全面中立'; c = '#9bd09b'; }
-  else if (tF < 7)  { s = 'AILERON ramping 副翼建立中'; c = '#ffaa44'; }
-  else if (tF < 18) { s = 'AIL ±15° SUSTAINED · ELEV ~0° 副翼持续偏'; c = '#ff8844'; }
-  else              { s = '★ ELEV SUDDEN DOWN ← 推杆到底 COLUMN PUSHED HARD ★'; c = '#ff3838'; }
-  act.surfStatus.textContent = s;
-  act.surfStatus.style.fill = c;
-}
-
-function updActions(t){
-  if(!act.strip) return;
-  updApCard(t);
-  updFuelCard(t);
-  updYokeCards(t);
-  updSurfaceCard(t);
-}
-
-function updEvt(t){
-  let ci=-1;for(let i2=EVT.length-1;i2>=0;i2--)if(t>=EVT[i2].t){ci=i2;break;}
-  if(ci!==lastEI&&ci>=0){eMsg.textContent=EVT[ci].m;eSub.textContent=EVT[ci].s;eBanner.classList.add('visible');clearTimeout(bannerT);bannerT=setTimeout(()=>eBanner.classList.remove('visible'),4500);lastEI=ci;}
-  evtEls.forEach(el=>{const et=+el.dataset.t;el.className=t>=et+5?'evt passed':t>=et-1?'evt active':'evt';});
-}
-
-/* ── impact (explosion → smoke → dissipation) ── */
-const impP=[];let impacted=false;
-const impactPos=g2l(23.32375,111.11231,0);
-function doImpact(){
-  if(impacted)return;impacted=true;
-  AG.visible=false;                                  // hide aircraft body
-  const sph=new THREE.SphereGeometry(.5,12,10);
-  // Stage 1: bright orange-yellow flash (large, short-lived)
-  for(let i2=0;i2<8;i2++){
-    const m=new THREE.MeshBasicMaterial({color:new THREE.Color(1,.7+Math.random()*.3,.2+Math.random()*.2),transparent:true,opacity:.9});
-    const p=new THREE.Mesh(sph,m);
-    p.position.set(impactPos.x+(Math.random()-.5)*.5,impactPos.y+.4+Math.random()*.4,impactPos.z+(Math.random()-.5)*.5);
-    p.userData.v=new THREE.Vector3((Math.random()-.5)*4,Math.random()*2.5+1,(Math.random()-.5)*4);
-    p.userData.kind='flash';p.userData.life=.5+Math.random()*.3;p.userData.lifeMax=p.userData.life;
-    p.scale.setScalar(.6+Math.random()*.6);
-    scene.add(p);impP.push(p);
-  }
-  // Stage 2: thick dark smoke plume (rising, expanding, slow fade)
-  for(let i2=0;i2<26;i2++){
-    const sh=.12+Math.random()*.18;
-    const m=new THREE.MeshBasicMaterial({color:new THREE.Color(sh,sh,sh),transparent:true,opacity:.0});
-    const p=new THREE.Mesh(sph,m);
-    p.position.set(impactPos.x+(Math.random()-.5)*1.6,impactPos.y+.2+Math.random()*.6,impactPos.z+(Math.random()-.5)*1.6);
-    p.userData.v=new THREE.Vector3((Math.random()-.5)*.7,Math.random()*1.2+.4,(Math.random()-.5)*.7);
-    p.userData.kind='smoke';
-    p.userData.delay=Math.random()*.6;               // staggered emergence
-    p.userData.life=8+Math.random()*5;p.userData.lifeMax=p.userData.life;
-    p.userData.peak=.55+Math.random()*.25;           // peak opacity for this puff
-    p.scale.setScalar(.4+Math.random()*.5);
-    scene.add(p);impP.push(p);
-  }
-  // Stage 3: bright ember sparks (short, fast, small)
-  for(let i2=0;i2<14;i2++){
-    const m=new THREE.MeshBasicMaterial({color:new THREE.Color(1,.5+Math.random()*.4,.1),transparent:true,opacity:1});
-    const p=new THREE.Mesh(sph,m);
-    p.position.set(impactPos.x,impactPos.y+.3,impactPos.z);
-    p.userData.v=new THREE.Vector3((Math.random()-.5)*5,Math.random()*3+1,(Math.random()-.5)*5);
-    p.userData.kind='ember';p.userData.life=.8+Math.random()*.6;p.userData.lifeMax=p.userData.life;
-    p.scale.setScalar(.08+Math.random()*.1);
-    scene.add(p);impP.push(p);
-  }
-}
-
-/* ================================================================
-   CAMERA SYSTEM
-   All modes allow free orbit (mouse/trackpad).
-   Manual orbit → revert to Free (follow).
-   Named modes position camera; Free just follows target.
-   ================================================================ */
-const S={playing:true,t:0,speed:2,cam:'tail'};
-let prevAircraftPos=new THREE.Vector3();
-let pTS=0;
-
-oc.addEventListener('start',()=>{
-  if(S.cam!=='free'){
-    S.cam='free';
-    document.querySelectorAll('.cam-btn').forEach(b=>b.classList.remove('active'));
-    document.getElementById('cam-free').classList.add('active');
-  }
-});
-
-function updCam(d){
-  if(impacted){
-    prevAircraftPos.copy(d.pos);
-    return;
+  if (idx !== sim.curIdx) {
+    sim.curIdx = idx;
+    onModuleEnter(plan.modules[idx]);
   }
 
-  // Shift camera + target to follow aircraft movement (all modes)
-  {
-    const delta=d.pos.clone().sub(prevAircraftPos);
-    if(delta.length()<50){
-      cam.position.add(delta);
-      oc.target.add(delta);
+  const mod = plan.modules[idx];
+  const mt = sim.time - mod.start;
+  const dur = mod.duration;
+
+  // Run module
+  const fn = MODULE_FN[mod.type];
+  if (fn) fn(mod, mt, dur, dt);
+
+  // Compute targets
+  updatePlaneTargets(dt, mod, mt);
+
+  // UI
+  updateUI();
+}
+
+function onModuleEnter(mod) {
+  // Announce
+  document.getElementById('annName').textContent = MODULE_DEFS[mod.type].label.replace('编队变换 → ',
+    '编队变换 → ' + (mod.target||''));
+  document.getElementById('annSub').textContent = '· ' + (mod.target || mod.formation || '');
+  const a = document.getElementById('announce');
+  a.classList.add('show');
+  clearTimeout(onModuleEnter._t);
+  onModuleEnter._t = setTimeout(() => a.classList.remove('show'), 1600);
+}
+
+// ---------- Camera ----------
+const camTmp = new THREE.Vector3();
+function updateCamera(dt) {
+  const c = sim.cam;
+  // Compute formation centroid
+  const cx = new THREE.Vector3();
+  for (const p of planes) cx.add(p.position);
+  if (planes.length) cx.divideScalar(planes.length);
+
+  let want = new THREE.Vector3();
+  let look = cx.clone();
+  if (c === 'auto') {
+    // Cinematic: orbit around centroid based on time, slow drift
+    const t = sim.time * 0.05;
+    const r = 140;
+    want.set(cx.x + Math.cos(t)*r + 80, cx.y + 25, cx.z + Math.sin(t)*r + 80);
+    if (planes.length) {
+      // peek slightly ahead of leader
+      const f = leaderForward().multiplyScalar(40);
+      look = planes[0].position.clone().add(f);
     }
+  } else if (c === 'leader' && planes.length) {
+    const lp = planes[0].position;
+    const lq = planes[0].quaternion;
+    const off = camTmp.set(0, 5, 24).applyQuaternion(lq);
+    want.copy(lp).add(off);
+    const aheadV = new THREE.Vector3(0,1,-15).applyQuaternion(lq);
+    look.copy(lp).add(aheadV);
+    camera.up.set(0,1,0).applyQuaternion(lq);
+  } else if (c === 'ground') {
+    want.set(-220, 30, 80);
+    look.copy(cx);
+  } else if (c === 'wide') {
+    want.set(0, 250, 900);
+    look.copy(cx);
   }
-  prevAircraftPos.copy(d.pos);
 
-  if(S.cam==='free') return;
-
-  const hr=d.hdg*D2R;
-  const fwd=new THREE.Vector3(Math.sin(hr),0,-Math.cos(hr));
-  const right=new THREE.Vector3(Math.cos(hr),0,Math.sin(hr));
-
-  if(S.cam==='tail'){
-    const tgt=d.pos.clone().sub(fwd.clone().multiplyScalar(7)).add(new THREE.Vector3(0,2.5,0));
-    cam.position.lerp(tgt,.05);
-    oc.target.lerp(d.pos,.07);
-  }else if(S.cam==='left'){
-    const tgt=d.pos.clone().sub(right.clone().multiplyScalar(9)).add(new THREE.Vector3(0,1.6,0));
-    cam.position.lerp(tgt,.05);
-    oc.target.lerp(d.pos,.07);
-  }else if(S.cam==='right'){
-    const tgt=d.pos.clone().add(right.clone().multiplyScalar(9)).add(new THREE.Vector3(0,1.6,0));
-    cam.position.lerp(tgt,.05);
-    oc.target.lerp(d.pos,.07);
-  }else if(S.cam==='top'){
-    cam.position.lerp(d.pos.clone().add(new THREE.Vector3(0,32,.1)),.05);
-    oc.target.lerp(d.pos,.07);
-  }
+  if (c !== 'leader') camera.up.set(0,1,0);
+  const k = c === 'leader' ? 0.35 : 0.05;
+  camera.position.lerp(want, k);
+  camera.lookAt(look);
 }
 
-/* ================================================================
-   ANIMATION LOOP
-   ================================================================ */
-const trails=[];
-const trG=new THREE.SphereGeometry(.02,4,4);
-const trM=new THREE.MeshBasicMaterial({color:0x88bbff,transparent:true,opacity:.35});
+// ---------- UI ----------
+const elList = document.getElementById('moduleList');
+const elTime = document.getElementById('time');
+const elCur = document.getElementById('curModule');
+const elNext = document.getElementById('nextModule');
+const elPlanText = document.getElementById('planText');
+const elTlFill = document.getElementById('tl-fill');
+const elTlMarker = document.getElementById('tl-marker');
+const elTlTicks = document.getElementById('tlticks');
 
-function animate(ts){
-  requestAnimationFrame(animate);
-  const dtMs=ts-pTS;pTS=ts;const dt=Math.min(dtMs/1000,.1);
-  if(S.playing){S.t+=dt*S.speed;if(S.t>=DUR){S.t=DUR;S.playing=false;}}
-  const d=interp(S.t);
-
-  if(!impacted){
-    if(d.alt>5){
-      AG.position.copy(d.pos);
-      const hr=-d.hdg*D2R+Math.PI/2;
-      AG.rotation.order='YZX';
-      AG.rotation.set(d.bank,hr,d.pitch);
-      AG.visible=true;
-    }else{
-      doImpact();
-    }
-  }
-  // After impact: AG remains hidden; only explosion/smoke particles render.
-
-  // Trails during descent
-  if(d.phase!=='CRUISE'&&d.alt>5&&Math.random()<.2){
-    const tr=new THREE.Mesh(trG,trM.clone());tr.position.copy(d.pos);tr.userData.life=1;
-    scene.add(tr);trails.push(tr);
-  }
-  for(let i2=trails.length-1;i2>=0;i2--){
-    const p=trails[i2];p.userData.life-=dt*.25;p.material.opacity=p.userData.life*.3;
-    if(p.userData.life<=0){scene.remove(p);p.geometry.dispose();p.material.dispose();trails.splice(i2,1);}
-  }
-  for(let i2=impP.length-1;i2>=0;i2--){
-    const p=impP[i2];const u=p.userData;
-    if(u.kind==='flash'){
-      u.life-=dt;
-      p.position.add(u.v.clone().multiplyScalar(dt));
-      u.v.multiplyScalar(0.92);                     // rapid deceleration
-      const k=Math.max(0,u.life/u.lifeMax);
-      p.material.opacity=k*.95;
-      p.scale.multiplyScalar(1+dt*2.2);             // fast expansion
-    }else if(u.kind==='ember'){
-      u.life-=dt;
-      p.position.add(u.v.clone().multiplyScalar(dt));
-      u.v.y-=dt*4;                                  // gravity
-      u.v.multiplyScalar(0.97);
-      const k=Math.max(0,u.life/u.lifeMax);
-      p.material.opacity=k;
-    }else{                                           // smoke
-      if(u.delay>0){u.delay-=dt;p.material.opacity=0;continue;}
-      u.life-=dt;
-      p.position.add(u.v.clone().multiplyScalar(dt));
-      u.v.y=Math.max(.15,u.v.y-dt*.05);             // drag, but keep rising
-      u.v.x*=0.985;u.v.z*=0.985;
-      const k=u.life/u.lifeMax;                     // 1 → 0
-      // Fade-in (first 12% of life), hold, then fade-out
-      const fadeIn=Math.min(1,(1-k)/0.12);
-      const fadeOut=Math.min(1,k/0.5);
-      p.material.opacity=u.peak*fadeIn*fadeOut;
-      p.scale.multiplyScalar(1+dt*.35);             // slow expand
-    }
-    if(u.life<=0){scene.remove(p);p.geometry.dispose();p.material.dispose();impP.splice(i2,1);}
-  }
-  if(window._ring){window._ring.material.opacity=.4+Math.sin(ts*.003)*.3;window._ring.scale.setScalar(1+Math.sin(ts*.002)*.15);}
-
-  updEvt(S.t);
-  updActions(S.t);
-  updCam(d);
-  updAdsLabels();
-  oc.update();
-  updHUD(d);
-  R.render(scene,cam);
+function fmtTime(s) {
+  s = Math.max(0, s);
+  const m = Math.floor(s/60), r = Math.floor(s%60);
+  return String(m).padStart(2,'0')+':'+String(r).padStart(2,'0');
 }
 
-/* ── HUD ── */
-const $=id=>document.getElementById(id);
-function updHUD(d){
-  const em=d.phase!=='CRUISE';
-  $('v-alt').textContent=Math.round(d.alt);$('v-alt').className=(d.alt<5000&&em)?'val warning':'val';
-  $('v-spd').textContent=Math.round(d.spd);$('v-spd').className=d.spd>500?'val warning':'val';
-  $('v-hdg').textContent=Math.round(d.hdg);
-  $('v-vs').textContent=Math.round(d.vs);$('v-vs').className=Math.abs(d.vs)>10000?'val warning':'val';
-  $('v-pitch').textContent=(d.pitch/D2R).toFixed(1);
-  $('v-bank').textContent=(d.bank/D2R).toFixed(1);
-  $('v-gload').textContent=d.gLoad.toFixed(1);$('v-gload').className=d.gLoad>2?'val warning':'val';
-  const ut=T0+d.t;const ud=new Date(ut*1000);
-  const fmtHMS_ms=dt=>[dt.getUTCHours(),dt.getUTCMinutes(),dt.getUTCSeconds()].map(v=>String(v).padStart(2,'0')).join(':')+'.'+String(dt.getUTCMilliseconds()).padStart(3,'0');
-  $('v-utc').textContent=fmtHMS_ms(ud);
-  const cd=new Date((ut+28800)*1000);
-  const cstStr=fmtHMS_ms(cd);
-  $('v-cst').textContent=cstStr;
-  $('v-cst-tl').textContent=cstStr;
-  $('v-lat').textContent=d.lat.toFixed(4);$('v-lon').textContent=d.lon.toFixed(4);
-  const pl=$('phase-label');
-  const clrs={CRUISE:'#44dd88',MANEUVERING:'#ddaa44','INITIAL DIVE':'#ff8800',RECOVERY:'#dddd44','FINAL DIVE':'#ff2222'};
-  pl.textContent=d.phase;pl.style.color=clrs[d.phase]||'#aaa';pl.className=d.phase==='FINAL DIVE'?'warning':'';
-  const rel=Math.max(0,d.t-START_T);
-  const relMs=Math.floor((rel*1000)%1000);
-  $('v-elapsed').textContent=String(Math.floor(rel/60)).padStart(2,'0')+':'+String(Math.floor(rel%60)).padStart(2,'0')+'.'+String(relMs).padStart(3,'0');
-  $('alt-bar').style.height=Math.max(0,Math.min(100,d.alt/30000*100))+'%';
-  const pct=Math.max(0,(d.t-START_T)/(DUR-START_T)*100);$('timeline-fill').style.width=pct+'%';$('timeline-marker').style.left=pct+'%';
-}
-
-/* ── controls ── */
-function reset(){lastEI=-1;impP.forEach(p=>{scene.remove(p);p.geometry.dispose();p.material.dispose();});impP.length=0;smP=2*D2R;smB=0;smH=100;_lt=-1;_wasFDR=false;
-  impacted=false;AG.visible=false;
-  trails.forEach(p=>{scene.remove(p);p.geometry.dispose();p.material.dispose();});trails.length=0;
-}
-function seekTo(t){
-  S.t=Math.max(0,Math.min(DUR,t));reset();
-  const d=interp(S.t);
-  const off=cam.position.clone().sub(oc.target);
-  oc.target.copy(d.pos);cam.position.copy(d.pos).add(off);
-  prevAircraftPos.copy(d.pos);
-}
-// Combined Play/Pause toggle. If at end of playback, restart from cruise.
-function updPlayPauseBtn(){
-  $('btn-playpause').innerHTML = S.playing
-    ? '&#10073;&#10073; Pause 暂停'
-    : '&#9654; Play 播放';
-}
-$('btn-playpause').onclick = () => {
-  if (S.t >= DUR) {
-    S.t = START_T; reset();
-    const d = interp(START_T); prevAircraftPos.copy(d.pos);
-    const hr0 = d.hdg * D2R;
-    cam.position.copy(d.pos).add(new THREE.Vector3(-Math.sin(hr0)*7, 2.5, Math.cos(hr0)*7));
-    oc.target.copy(d.pos);
-    S.playing = true;
-  } else {
-    S.playing = !S.playing;
-  }
-  updPlayPauseBtn();
-};
-updPlayPauseBtn();
-// Speed selector — main button shows current speed; menu options set it.
-function updSpeedBtn(){
-  $('btn-speed').innerHTML = S.speed + '&times;';
-  document.querySelectorAll('.speed-opt').forEach(b => {
-    b.classList.toggle('active', parseInt(b.dataset.spd) === S.speed);
+function renderModules() {
+  elList.innerHTML = '';
+  plan.modules.forEach((m, i) => {
+    const def = MODULE_DEFS[m.type];
+    const div = document.createElement('div');
+    div.className = 'mod';
+    if (def.locked) div.dataset.locked = '1';
+    if (sim.curIdx === i) div.classList.add('active');
+    if (sim.curIdx > i) div.classList.add('passed');
+    const meta = m.target ? '→ '+m.target : (m.formation ? '→ '+m.formation : (m.altitude ? m.altitude+'m' : ''));
+    div.innerHTML = `
+      <span class="num">${String(i+1).padStart(2,'0')}</span>
+      <span class="name">${def.label.replace('编队变换 → ', '编队变换 → '+(m.target||''))}</span>
+      <span class="meta">${m.duration}s ${meta}</span>
+      <span class="ctrl">
+        <button data-act="up" data-i="${i}">↑</button>
+        <button data-act="down" data-i="${i}">↓</button>
+        <button data-act="del" data-i="${i}">×</button>
+      </span>
+    `;
+    elList.appendChild(div);
   });
 }
-document.querySelectorAll('.speed-opt').forEach(opt => {
-  opt.onclick = e => { S.speed = parseInt(opt.dataset.spd); updSpeedBtn(); };
+elList.addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  const i = +b.dataset.i;
+  const act = b.dataset.act;
+  if (MODULE_DEFS[plan.modules[i].type].locked) return;
+  if (act === 'del') plan.modules.splice(i, 1);
+  else if (act === 'up' && i > 1) { const t = plan.modules[i]; plan.modules[i] = plan.modules[i-1]; plan.modules[i-1] = t; }
+  else if (act === 'down' && i < plan.modules.length-2) { const t = plan.modules[i]; plan.modules[i] = plan.modules[i+1]; plan.modules[i+1] = t; }
+  rebuildAndReset();
 });
-updSpeedBtn();
-// Next-event button: jump to next EVT entry after current time, then PAUSE.
-$('btn-next-evt').onclick = () => {
-  let nextT = -1;
-  for (const e of EVT) {
-    if (e.t > S.t + 0.4) { nextT = e.t; break; }
-  }
-  if (nextT < 0) return;     // no more events
-  seekTo(nextT);
-  S.playing = false;          // pause at the event so user reads the banner
-  updPlayPauseBtn();
-};
-$('timeline').onclick=ev=>{const r=$('timeline').getBoundingClientRect();seekTo(START_T+(ev.clientX-r.left)/r.width*(DUR-START_T));};
 
-// Camera mode buttons
-['free','tail','left','right','top'].forEach(mode=>{
-  $('cam-'+mode).onclick=()=>{
-    S.cam=mode;
-    document.querySelectorAll('.cam-btn').forEach(b=>b.classList.remove('active'));
-    $('cam-'+mode).classList.add('active');
+let formCycleIdx = 0;
+document.querySelectorAll('.add-row button').forEach(b => {
+  b.addEventListener('click', () => {
+    const type = b.dataset.add;
+    const def = MODULE_DEFS[type];
+    const m = { type, duration: def.defDur };
+    if (type === 'FORMATION_CHANGE') m.target = FORMATION_CYCLE[(formCycleIdx++) % FORMATION_CYCLE.length];
+    // Insert just before BREAK_LANDING (last)
+    plan.modules.splice(plan.modules.length-1, 0, m);
+    rebuildAndReset();
+  });
+});
+
+function bindSetup() {
+  const map = {
+    teamSize: ['team','size','number'],
+    initFormation: ['team','initialFormation','string'],
+    altMin: ['alt','min','number'],
+    altMax: ['alt','max','number'],
+    spdMin: ['speed','min','number'],
+    spdMax: ['speed','max','number'],
+    takeoffTime: [null,'takeoffTime','number'],
   };
-});
-
-// Data sources toggle
-$('src-toggle').onclick=()=>{
-  const list=$('src-list');
-  const open=list.style.display!=='none';
-  list.style.display=open?'none':'block';
-  $('src-toggle').innerHTML='DATA FIDELITY 数据真实度 '+(open?'&#9662;':'&#9652;');
-};
-
-// Cockpit interaction cards (event-driven, no manual toggle needed)
-actInit();
-
-addEventListener('resize',()=>{cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix();R.setSize(innerWidth,innerHeight);});
-
-// Spacebar shortcut: toggle play / pause (also restart from cruise if at end)
-addEventListener('keydown', e => {
-  if (e.code !== 'Space' || e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-  e.preventDefault();
-  if (S.t >= DUR) {
-    S.t = START_T; reset();
-    const d = interp(START_T); prevAircraftPos.copy(d.pos);
-    const hr0 = d.hdg * D2R;
-    cam.position.copy(d.pos).add(new THREE.Vector3(-Math.sin(hr0)*7, 2.5, Math.cos(hr0)*7));
-    oc.target.copy(d.pos);
-    S.playing = true;
-  } else {
-    S.playing = !S.playing;
+  for (const id in map) {
+    const el = document.getElementById(id);
+    const [grp, key, t] = map[id];
+    el.addEventListener('change', () => {
+      const v = t==='number' ? +el.value : el.value;
+      if (grp) plan[grp][key] = v;
+      else plan[key] = v;
+      // Recompute cruise alt mid
+      plan.alt.cruise = (plan.alt.min + plan.alt.max) / 2;
+      plan.speed.cruise = (plan.speed.min + plan.speed.max) / 2;
+      rebuildAndReset();
+    });
   }
-  updPlayPauseBtn();
-});
-
-/* ================================================================
-   INIT
-   ================================================================ */
-async function init(){
-  const [satResult]=await Promise.allSettled([loadSatTerrain(),loadAircraft()]);
-  if(satResult.status==='rejected'||!satResult.value?.loaded){
-    console.warn('Sat tiles failed, fallback terrain');
-    makeFallbackTerrain();
-  }
-  makeCrashMarker();makeFlightPath();makeAltLabels();
-  scene.add(new THREE.GridHelper(400,40,0x44554433,0x33443322));
-  const tDur=DUR-START_T;
-  const tDurMs=Math.floor((tDur*1000)%1000);
-  $('v-total').textContent=String(Math.floor(tDur/60)).padStart(2,'0')+':'+String(Math.floor(tDur%60)).padStart(2,'0')+'.'+String(tDurMs).padStart(3,'0');
-
-  // Timeline event ticks (with CST millisecond timestamp)
-  const tlEl=$('timeline');
-  const fmtCstMs=t=>{const dt=new Date((T0+t+28800)*1000);return [dt.getUTCHours(),dt.getUTCMinutes(),dt.getUTCSeconds()].map(v=>String(v).padStart(2,'0')).join(':')+'.'+String(dt.getUTCMilliseconds()).padStart(3,'0');};
-  EVT.forEach(e=>{
-    if(e.t<START_T)return;
-    const pct=(e.t-START_T)/(DUR-START_T)*100;
-    const tick=document.createElement('div');
-    tick.className='tl-tick'+(e.t>=388?' tl-impact':'');
-    tick.style.left=pct+'%';
-    const tip=document.createElement('div');
-    tip.className='tl-tip';
-    tip.innerHTML='<span style="color:#88ccff">CST '+fmtCstMs(e.t)+'</span><br>'+e.tl;
-    tick.appendChild(tip);
-    tick.addEventListener('click',ev=>{ev.stopPropagation();seekTo(e.t-1);S.playing=true;});
-    tlEl.appendChild(tick);
-  });
-
-  S.t=START_T;
-  const d0=interp(S.t);
-  prevAircraftPos.copy(d0.pos);
-  const hr0=d0.hdg*D2R;
-  cam.position.copy(d0.pos).add(new THREE.Vector3(-Math.sin(hr0)*7,2.5,Math.cos(hr0)*7));
-  oc.target.copy(d0.pos);
-  oc.update();
-  document.getElementById('loading').style.display='none';
-  document.getElementById('hud').style.display='block';
-  animate(0);
 }
-init();
+bindSetup();
+
+document.getElementById('play').addEventListener('click', () => { sim.playing = true; });
+document.getElementById('pause').addEventListener('click', () => { sim.playing = false; });
+document.getElementById('restart').addEventListener('click', () => { rebuildAndReset(); sim.playing = true; });
+document.getElementById('simSpeed').addEventListener('input', e => {
+  sim.speed = +e.target.value;
+  document.getElementById('spdLabel').textContent = sim.speed.toFixed(2);
+});
+document.querySelectorAll('#camMenu button').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('#camMenu button').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    sim.cam = b.dataset.cam;
+  });
+});
+document.getElementById('tl-track').addEventListener('click', e => {
+  const r = e.currentTarget.getBoundingClientRect();
+  const t = ((e.clientX - r.left) / r.width) * sim.totalTime;
+  // Hard scrub: rebuild from scratch then advance
+  rebuildAndReset();
+  const stepT = 1/30;
+  sim.playing = false;
+  while (sim.time < t) advanceSim(Math.min(stepT, t - sim.time));
+});
+
+function rebuildTimeline() {
+  rebuildSchedule();
+  sim.totalTime = plan.totalTime;
+  elTlTicks.innerHTML = '';
+  for (const m of plan.modules) {
+    const tk = document.createElement('div');
+    tk.className = 'tl-tick';
+    tk.style.left = (m.start/sim.totalTime*100) + '%';
+    tk.innerHTML = `<div class="tl-tip">${MODULE_DEFS[m.type].label.replace('编队变换 → ','编队变换 → '+(m.target||''))}</div>`;
+    elTlTicks.appendChild(tk);
+  }
+}
+
+function generatePlanText() {
+  const lines = [];
+  lines.push('═══ 飞行表演方案 / SHOW PLAN ═══');
+  lines.push('编队架数 Team Size : ' + plan.team.size);
+  lines.push('初始编队 Initial    : ' + plan.team.initialFormation);
+  lines.push('表演高度 Alt Range : ' + plan.alt.min + ' ~ ' + plan.alt.max + ' m');
+  lines.push('巡航速度 Speed     : ' + plan.speed.min + ' ~ ' + plan.speed.max + ' m/s');
+  lines.push('起飞时刻 Takeoff   : T+' + plan.takeoffTime + 's');
+  lines.push('总时长   Total     : ' + plan.totalTime.toFixed(0) + 's (' + fmtTime(plan.totalTime) + ')');
+  lines.push('');
+  lines.push('── 动作模块序列 / MODULES ──');
+  plan.modules.forEach((m, i) => {
+    const def = MODULE_DEFS[m.type];
+    let extra = '';
+    if (m.target) extra = ' → '+m.target;
+    if (m.formation) extra = ' → '+m.formation;
+    if (m.altitude) extra += ' @'+m.altitude+'m';
+    const ts = '['+fmtTime(m.start)+'-'+fmtTime(m.end)+']';
+    lines.push(' '+String(i+1).padStart(2,' ')+'. '+ts+' '+def.label.split(' ·')[0]+extra+' ('+m.duration+'s)');
+  });
+  return lines.join('\n');
+}
+
+function updateUI() {
+  elTime.textContent = fmtTime(sim.time) + ' / ' + fmtTime(sim.totalTime);
+  if (sim.totalTime > 0) {
+    elTlFill.style.width = (sim.time/sim.totalTime*100) + '%';
+    elTlMarker.style.left = (sim.time/sim.totalTime*100) + '%';
+  }
+  if (sim.curIdx >= 0) {
+    const m = plan.modules[sim.curIdx];
+    const def = MODULE_DEFS[m.type];
+    elCur.textContent = def.label.replace('编队变换 → ','编队变换 → '+(m.target||''));
+    const nm = plan.modules[sim.curIdx+1];
+    elNext.textContent = nm ? MODULE_DEFS[nm.type].label.replace('编队变换 → ','编队变换 → '+(nm.target||'')) : '— END —';
+  } else {
+    elCur.textContent = '— STAND BY —';
+    elNext.textContent = MODULE_DEFS[plan.modules[0].type].label;
+  }
+  // Throttle DOM updates for module list
+  if (updateUI._lastIdx !== sim.curIdx) {
+    renderModules();
+    updateUI._lastIdx = sim.curIdx;
+  }
+}
+
+function rebuildAndReset() {
+  // Apply setup inputs
+  document.getElementById('teamSize').value = plan.team.size;
+  document.getElementById('initFormation').value = plan.team.initialFormation;
+  document.getElementById('altMin').value = plan.alt.min;
+  document.getElementById('altMax').value = plan.alt.max;
+  document.getElementById('spdMin').value = plan.speed.min;
+  document.getElementById('spdMax').value = plan.speed.max;
+  document.getElementById('takeoffTime').value = plan.takeoffTime;
+  plan.alt.cruise = (plan.alt.min + plan.alt.max) / 2;
+  plan.speed.cruise = (plan.speed.min + plan.speed.max) / 2;
+  rebuildTimeline();
+  resetSim();
+  renderModules();
+  elPlanText.textContent = generatePlanText();
+}
+
+rebuildAndReset();
+resize();
+requestAnimationFrame(frame);
 </script>
 </body>
 </html>
