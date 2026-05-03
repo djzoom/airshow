@@ -1109,6 +1109,9 @@ queueMicrotask(() => applyDayNight());
 // world distance, so a 1600-unit runway is plenty). The mesh is dropped
 // at origin with its bbox grounded on y=0.
 const TARGET_RUNWAY_LEN = 1600;
+// Updated once the airport.glb loads — used by reset to put plane wheels
+// just above the actual GLB runway slab (whose top isn't necessarily y=0).
+let RUNWAY_TOP_Y = 0;
 const airportGroup = new THREE.Group();
 scene.add(airportGroup);
 
@@ -1153,6 +1156,23 @@ function loadAirportFromVenue(venue) {
     m.position.z -= (box2.min.z + box2.max.z) / 2 - (venue.airportOffset?.z || 0);
     m.position.y -= box2.min.y;
     m.traverse(c => { if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; }});
+    // Detect runway slab top: pick the mesh with the longest Z extent
+    // that is at most a meter or two thick (the actual tarmac strip),
+    // and remember its world-space top so planes never spawn through it.
+    m.updateMatrixWorld(true);
+    const runwayBox = new THREE.Box3();
+    let bestZSpan = 0;
+    m.traverse(c => {
+      if (!c.isMesh) return;
+      const b = new THREE.Box3().setFromObject(c);
+      const sz = b.getSize(new THREE.Vector3());
+      if (sz.z > 200 && sz.y < 12 && sz.z > bestZSpan) {
+        bestZSpan = sz.z;
+        runwayBox.copy(b);
+      }
+    });
+    RUNWAY_TOP_Y = bestZSpan > 0 ? runwayBox.max.y + 0.5 : 0.5;
+    console.log('[airport] runway top y =', RUNWAY_TOP_Y.toFixed(2), 'span', bestZSpan.toFixed(0));
     airportGroup.add(m);
     // (runway lights removed — flicker/aliasing harmed daylight readability)
     console.log('[airport] loaded', venue.airportModel || 'airport.glb', 'runway', horiz.toUpperCase(), 'len', runway.toFixed(1), '→ scale', scale.toFixed(3));
@@ -1685,7 +1705,10 @@ function resetSim() {
   sim.mirrorPhase = 0;
   sim.landingPhase = 0;
 
-  leaderState.pos.set(0, 5, 700);   // sit clearly above the GLB runway slab
+  // Wheels sit on the actual GLB runway top + some clearance for the
+  // airframe's bbox-center-to-belly distance (~3 units for these scales).
+  const groundY = (RUNWAY_TOP_Y || 0) + 3;
+  leaderState.pos.set(0, groundY, 700);
   leaderState.quat.identity();   // forward = -Z
   leaderState.speed = 0;
 
@@ -1695,7 +1718,7 @@ function resetSim() {
     const wp = off.clone().applyQuaternion(leaderState.quat);
     const p = planes[i];
     p.position.copy(leaderState.pos).add(wp);
-    p.position.y = 5;   // wheels above the runway
+    p.position.y = groundY;
     p.quaternion.copy(leaderState.quat);
     p.targetPos.copy(p.position);
     p.targetQuat.copy(p.quaternion);
@@ -1758,7 +1781,7 @@ function MOD_TAKEOFF(mod, mt, dur, dt) {
   // Pure forward motion — y rises naturally from the pitched velocity.
   leaderState.pos.addScaledVector(leaderForward(), leaderState.speed * dt);
   // Floor the wheels at runway height during the ground roll.
-  if (t < 0.5) leaderState.pos.y = Math.max(leaderState.pos.y, 5);
+  if (t < 0.5) leaderState.pos.y = Math.max(leaderState.pos.y, (RUNWAY_TOP_Y||0) + 3);
   sim.formationFrom = sim.formationTo = plan.team.initialFormation;
   sim.formationT = 1;
 }
@@ -1874,7 +1897,7 @@ function MOD_BREAK_LANDING(mod, mt, dur, dt) {
     moveLeaderForward(dt, plan.speed.cruise * (1 - t*0.4));
   } else {
     // Flare and touch down
-    leaderState.pos.y = Math.max(5, leaderState.pos.y - 8*dt);
+    leaderState.pos.y = Math.max((RUNWAY_TOP_Y||0) + 3, leaderState.pos.y - 8*dt);
     alignLeaderTo(levelQuat(), 2, dt);
     moveLeaderForward(dt, Math.max(20, leaderState.speed - 25*dt));
   }
@@ -2059,25 +2082,9 @@ function updatePlaneTargets(dt, mod, mt) {
       p.targetQuat.copy(lq).multiply(spread);
     }
 
-    // Per-airframe organic jitter — small uncorrelated body-frame wobbles
-    // so the formation reads like real wingmen riding the bow wave instead
-    // of a rigid CGI lockstep. Skips the leader (i=0) and any plane that
-    // already has a script driving it (BURST / breakaway / rejoin).
-    if (i > 0 && !(mod && (mod.type === 'BOMB_BURST' || mod.type === 'MIRROR_PASS' || mod.type === 'BREAK_LANDING'))) {
-      const tt = sim.time + p.idx * 1.7;
-      const jPitch = Math.sin(tt * 0.62 + p.idx * 0.31) * 0.012;   // ~0.7°
-      const jRoll  = Math.sin(tt * 0.47 + p.idx * 0.83) * 0.022;   // ~1.3°
-      const jYaw   = Math.cos(tt * 0.39 + p.idx * 0.55) * 0.010;   // ~0.6°
-      const wob = new THREE.Quaternion().setFromEuler(
-        new THREE.Euler(jPitch, jYaw, jRoll, 'XYZ')
-      );
-      p.targetQuat.multiply(wob);
-      // Tiny world-space drift so the wingmen don't sit stamped at exact
-      // formation slots. Sub-meter, low-frequency.
-      p.targetPos.x += Math.sin(tt * 0.43 + p.idx * 1.1) * 0.45;
-      p.targetPos.y += Math.cos(tt * 0.51 + p.idx * 0.7) * 0.30;
-      p.targetPos.z += Math.sin(tt * 0.37 + p.idx * 0.8) * 0.45;
-    }
+    // (Per-airframe organic wobble was reading as high-frequency jitter
+    //  on screen — removed. If formation looks too rigid we'll revisit
+    //  with longer-period drifts.)
 
     // Per-aircraft tasks: superimpose individual scripted behavior on top
     // of the formation target. Skips the leader (idx 0) to keep formation
