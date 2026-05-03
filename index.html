@@ -522,7 +522,6 @@ kbd,#comms button kbd,.comms-hint kbd{
       <button data-cam="heli" title="跟拍直升机 · 圆轨道">🚁 HELI</button>
       <button data-cam="wing" title="僚机视角">✈️ WING</button>
       <button data-cam="free" title="鼠标拖拽自由视角">🎮 FREE</button>
-      <button id="dnToggle" title="昼夜切换">☼</button>
     </div>
     <div id="camFade"></div>
     <div id="legend">
@@ -756,7 +755,7 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 0.9;
+renderer.toneMappingExposure = 0.65;
 renderer.physicallyCorrectLights = true;
 
 const scene = new THREE.Scene();
@@ -826,7 +825,7 @@ function applyDayNight() {
   if (typeof skyU !== 'undefined') {
     if (dayNight === 'dusk') { skyU.turbidity.value = 7; skyU.rayleigh.value = 2.6; skyU.mieCoefficient.value = 0.008; skyU.mieDirectionalG.value = 0.9; }
     else if (dayNight === 'night') { skyU.turbidity.value = 18; skyU.rayleigh.value = 0.3; skyU.mieCoefficient.value = 0.002; skyU.mieDirectionalG.value = 0.6; }
-    else { skyU.turbidity.value = 3.0; skyU.rayleigh.value = 1.2; skyU.mieCoefficient.value = 0.004; skyU.mieDirectionalG.value = 0.82; }
+    else { skyU.turbidity.value = 2.0; skyU.rayleigh.value = 0.7; skyU.mieCoefficient.value = 0.003; skyU.mieDirectionalG.value = 0.8; }
     refreshSkyEnvironment();
     // Use the sky shader as the visible background — no static color.
     scene.background = null;
@@ -852,10 +851,10 @@ scene.add(sky);
 const skyU = sky.material.uniforms;
 // Initial values match SKY.day in applyDayNight() — keeps the sky a
 // true daylight blue instead of the white-out the defaults produced.
-skyU.turbidity.value = 3.0;
-skyU.rayleigh.value = 1.2;
-skyU.mieCoefficient.value = 0.004;
-skyU.mieDirectionalG.value = 0.82;
+skyU.turbidity.value = 2.0;
+skyU.rayleigh.value = 0.7;
+skyU.mieCoefficient.value = 0.003;
+skyU.mieDirectionalG.value = 0.8;
 
 // Re-baked PMREM whenever the sun moves; cached so day-night transitions
 // don't keep allocating textures.
@@ -1519,8 +1518,7 @@ function makeRibbon(plane) {
       varying vec3 vColor;
       void main() {
         if (vAlpha < 0.005) discard;
-        // Push past Bloom's HDR threshold so the trail edges glow softly.
-        gl_FragColor = vec4(vColor * 1.55, vAlpha);
+        gl_FragColor = vec4(vColor, vAlpha);
       }`,
   });
   const mesh = new THREE.Mesh(geo, mat);
@@ -1677,7 +1675,7 @@ function resetSim() {
   sim.mirrorPhase = 0;
   sim.landingPhase = 0;
 
-  leaderState.pos.set(0, 2, 700);   // wheels just touch the runway
+  leaderState.pos.set(0, 5, 700);   // sit clearly above the GLB runway slab
   leaderState.quat.identity();   // forward = -Z
   leaderState.speed = 0;
 
@@ -1687,7 +1685,7 @@ function resetSim() {
     const wp = off.clone().applyQuaternion(leaderState.quat);
     const p = planes[i];
     p.position.copy(leaderState.pos).add(wp);
-    p.position.y = 2;   // wheels on runway
+    p.position.y = 5;   // wheels above the runway
     p.quaternion.copy(leaderState.quat);
     p.targetPos.copy(p.position);
     p.targetQuat.copy(p.quaternion);
@@ -2156,9 +2154,9 @@ composer.setPixelRatio(renderer.getPixelRatio());
 composer.addPass(new RenderPass(scene, camera));
 const bloomPass = new UnrealBloomPass(
   new THREE.Vector2(canvas.clientWidth || 1, canvas.clientHeight || 1),
-  /*strength*/ IS_MOBILE ? 0.18 : 0.28,
-  /*radius*/   0.55,
-  /*threshold*/1.10   // sky stays solid; only ribbon×1.55 + lights bloom
+  /*strength*/ 0.0,    // off — was washing the daylight scene to white
+  /*radius*/   0.5,
+  /*threshold*/2.0
 );
 composer.addPass(bloomPass);
 if (!IS_MOBILE) composer.addPass(new SMAAPass(canvas.clientWidth || 1, canvas.clientHeight || 1));
@@ -2249,13 +2247,10 @@ const camLookAt = new THREE.Vector3(0, 100, 0);
 // Lens (FOV deg) per cam role. Smoothly lerped each frame.
 const CAM_FOV = { show:50, photog:30, heli:45, wing:55, free:55 };
 
-// Hand-held noise — small per-axis sine bobs, frequencies coprime so the
-// pattern never repeats.
-function applyHandheld(want, t, amp = 0.4) {
-  want.x += Math.sin(t * 4.1) * amp + Math.sin(t * 9.3) * amp * 0.4;
-  want.y += Math.cos(t * 5.7) * amp * 0.6;
-  want.z += Math.sin(t * 3.2) * amp * 0.5;
-}
+// Hand-held jitter — disabled. The micro-noise reads as a vibrating
+// camera and was causing motion fatigue. Left as a no-op so the call
+// sites stay tidy.
+function applyHandheld(_want, _t, _amp = 0) {}
 
 // Cinematic cut overlay — single short flash, no permanent transition.
 const camFadeEl = document.getElementById('camFade');
@@ -2302,8 +2297,9 @@ function pickShowSub(now) {
     do { next = candidates[(Math.random()*candidates.length)|0]; }
     while (candidates.length > 1 && next === showDirector.sub);
     showDirector.sub = next;
-    showDirector.nextCutAt = now + 4 + Math.random() * 5;  // 4–9s holds
-    triggerCut();
+    showDirector.nextCutAt = now + 9 + Math.random() * 7;  // 9–16s holds
+    // No flash on auto-cuts: the position lerp itself reads as a smooth
+    // hand-off, and constant flashes were causing strobe-like fatigue.
   }
   return showDirector.sub;
 }
@@ -2650,12 +2646,7 @@ addEventListener('keydown', e => {
   }
 });
 
-document.getElementById('dnToggle').addEventListener('click', e => {
-  dayNight = (dayNight === 'day') ? 'night' : (dayNight === 'night' ? 'dusk' : 'day');
-  e.currentTarget.classList.toggle('night', dayNight !== 'day');
-  e.currentTarget.textContent = dayNight === 'day' ? '☼' : (dayNight === 'dusk' ? '🌅' : '☾');
-  applyDayNight();
-});
+// (Day/night toggle removed — show is daylight-only.)
 
 // ---------- Instant-call comms menu ----------
 let commsOpen = false;
