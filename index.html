@@ -434,6 +434,7 @@ kbd,#comms button kbd,.comms-hint kbd{
         <button id="restart" title="重置">⟲</button>
         <span class="speedwrap">×<span id="spdLabel">1.0</span><input id="simSpeed" type="range" min="0.25" max="4" step="0.25" value="1"></span>
         <button id="smokeToggle" class="toggle on" title="切换全队烟雾">SMOKE</button>
+        <button id="trailPersist" class="toggle" title="航迹全程保留 / fade">TRAIL ∞</button>
         <span class="time" id="time">00:00 / 00:00</span>
       </div>
     </section>
@@ -1153,7 +1154,7 @@ function loadAirportFromVenue(venue) {
     m.position.y -= box2.min.y;
     m.traverse(c => { if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; }});
     airportGroup.add(m);
-    addRunwayLights();
+    // (runway lights removed — flicker/aliasing harmed daylight readability)
     console.log('[airport] loaded', venue.airportModel || 'airport.glb', 'runway', horiz.toUpperCase(), 'len', runway.toFixed(1), '→ scale', scale.toFixed(3));
   }, undefined, err => {
     console.warn('[airport] load failed, using procedural fallback:', err && err.message);
@@ -1387,24 +1388,15 @@ class Plane {
   setMesh(template, modelScale) {
     // template is a normalized scene: oriented (nose -Z), centered, unscaled.
     // Stored in template.userData.bbMax = pre-orient longest axis length.
+    // We share GLB materials across all clones so each plane wears the
+    // model's original livery — tinting with team colour was a fun idea
+    // but ended up muddy on textured GLBs. The per-team identity now
+    // lives in the smoke ribbon colour instead.
     const m = template.clone(true);
     const targetLen = modelScale || 8;
     const bbMax = template.userData.bbMax || 1;
     m.scale.setScalar(targetLen / bbMax);
-    m.traverse(c => {
-      if (c.isMesh) {
-        c.castShadow = true;
-        if (c.material) {
-          const mat = c.material.clone();
-          if (mat.color) {
-            const tint = new THREE.Color(this.color);
-            mat.color.lerp(tint, 0.55);
-            if (mat.emissive) mat.emissive.copy(tint).multiplyScalar(0.05);
-          }
-          c.material = mat;
-        }
-      }
-    });
+    m.traverse(c => { if (c.isMesh) c.castShadow = true; });
     this.group.add(m);
   }
   apply() {
@@ -1476,6 +1468,10 @@ for (const ps of Object.values(TEAM_PRESETS)) loadModelOnce(ps.model, ps.modelOr
 // camera, not a stack of puffs. Strip geometry captures that with one
 // draw call per plane.
 let smokeGlobalOn = true;
+// Ribbon persist mode: when true, the trail never fades or recycles — the
+// whole flight history paints the sky like skywriting. Toggled from the
+// SMOKE button area (long-press / dedicated toggle below).
+let ribbonPersist = false;
 const RIBBON_LEN = 220;        // ring entries
 const RIBBON_DT  = 0.030;      // seconds between samples
 const RIBBON_BASE_W = 0.55;    // half-width at the head (units)
@@ -1569,16 +1565,27 @@ function updateSmoke(p, dt) {
   // Walk newest-to-oldest by reading from r.head backwards. The vertex
   // pair index `i` in the geometry corresponds to ring slot
   // (r.head - 1 - i) mod RIBBON_LEN.
+  // When ribbonPersist is on, each entry survives forever instead of fading
+  // at 4.5 s. Width still grows with age — that's the diffusion of real
+  // colored vapor, which keeps it from looking like a hard-edged ribbon.
+  const persist = !!ribbonPersist;
+  const lifeMax = persist ? Number.POSITIVE_INFINITY : 4.5;
   for (let i=0;i<RIBBON_LEN;i++) {
     const ringIdx = (r.head - 1 - i + RIBBON_LEN) % RIBBON_LEN;
     const e = r.ring[ringIdx];
     const k = i*2*3;
-    if (e.age > 4.5) {
+    if (!persist && e.age > lifeMax) {
       alp[i*2] = 0; alp[i*2+1] = 0;
       pos[k] = pos[k+1] = pos[k+2] = pos[k+3] = pos[k+4] = pos[k+5] = 0;
       continue;
     }
-    const w = RIBBON_BASE_W + e.age * RIBBON_GROW * 12;
+    if (e.age > 1e6) {        // empty slot (initial)
+      alp[i*2] = 0; alp[i*2+1] = 0;
+      pos[k] = pos[k+1] = pos[k+2] = pos[k+3] = pos[k+4] = pos[k+5] = 0;
+      continue;
+    }
+    const wAge = Math.min(e.age, 4.5);
+    const w = RIBBON_BASE_W + wAge * RIBBON_GROW * 12;
     pos[k+0] = e.pos.x + e.right.x * w;
     pos[k+1] = e.pos.y + e.right.y * w;
     pos[k+2] = e.pos.z + e.right.z * w;
@@ -1587,11 +1594,14 @@ function updateSmoke(p, dt) {
     pos[k+5] = e.pos.z - e.right.z * w;
     col[k+0] = c.r; col[k+1] = c.g; col[k+2] = c.b;
     col[k+3] = c.r; col[k+4] = c.g; col[k+5] = c.b;
-    // Fade with both age and ring distance so the head is always opaque
-    // and the tail dies smoothly even if frame timing skews.
-    const ageK = Math.max(0, 1 - e.age / 4.5);
-    const distK = Math.max(0, 1 - i / (RIBBON_LEN - 4));
-    const a = ageK * ageK * Math.min(1, distK * 2.2) * 0.85;
+    let a;
+    if (persist) {
+      a = 0.78;     // flat opacity — full trail history visible
+    } else {
+      const ageK = Math.max(0, 1 - e.age / lifeMax);
+      const distK = Math.max(0, 1 - i / (RIBBON_LEN - 4));
+      a = ageK * ageK * Math.min(1, distK * 2.2) * 0.85;
+    }
     alp[i*2] = a; alp[i*2+1] = a;
   }
   r.geo.attributes.position.needsUpdate = true;
@@ -1715,26 +1725,40 @@ function approach(cur, target, rate, dt) {
 }
 
 function MOD_TAKEOFF(mod, mt, dur, dt) {
+  // Three phases — never directly write pos.y. Instead the leader's
+  // pitch tilts gradually upward and the forward-vector-driven motion
+  // does the climbing. This way the airframe's nose always points along
+  // the velocity vector (no "ground-clipping ghost rising straight up").
   const t = mt/dur;
+  let targetPitch = 0;        // rad, positive = nose up (YXZ Euler)
+  let targetSpeed = 95;
   if (t < 0.45) {
-    // Ground roll — keep level on runway
-    alignLeaderTo(levelQuat(), 6, dt);
-    leaderState.speed = 95 * (t/0.45);
-    leaderState.pos.y = 5;
-  } else if (t < 0.62) {
-    // Rotation — pitch up to ~13°, gain initial altitude
-    const p = (t-0.45)/0.17;
-    alignLeaderTo(climbQuat(0.22 * p), 4, dt);
-    leaderState.speed = approach(leaderState.speed, 105, 30, dt);
-    leaderState.pos.y = 5 + p*p * 25;
+    // Ground roll — wings level, accelerate
+    targetPitch = 0;
+    targetSpeed = 50 + (t/0.45) * 60;     // 50 → 110
+  } else if (t < 0.55) {
+    // Rotation — ease pitch up to 12°, no abrupt yank
+    const p = (t-0.45)/0.10;
+    const eased = p*p*(3 - 2*p);          // smoothstep
+    targetPitch = 0.21 * eased;
+    targetSpeed = approach(leaderState.speed, 110, 30, dt);
   } else {
-    // Climb-out — gradually level off toward cruise altitude
-    const p = (t-0.62)/0.38;
-    alignLeaderTo(climbQuat(0.18 * (1-p) + 0.05), 2.5, dt);
-    leaderState.speed = approach(leaderState.speed, 115, 25, dt);
-    leaderState.pos.y += (plan.alt.cruise - leaderState.pos.y) * 0.55 * dt;
+    // Climb-out — bleed pitch back to ~3° as altitude grows.
+    const p = (t-0.55)/0.45;
+    const climbAngle = (1 - p) * 0.21 + p * 0.05;
+    targetPitch = climbAngle;
+    targetSpeed = approach(leaderState.speed, 120, 25, dt);
+    // Optional cap: stop climbing once we hit cruise altitude.
+    if (leaderState.pos.y >= plan.alt.cruise) targetPitch = 0.0;
   }
+  // Smooth pitch lerp (rate=2.0 → ~0.5s time-constant) so the rotation
+  // looks like a controlled flare, not a snap.
+  alignLeaderTo(climbQuat(targetPitch), 2.0, dt);
+  leaderState.speed = targetSpeed;
+  // Pure forward motion — y rises naturally from the pitched velocity.
   leaderState.pos.addScaledVector(leaderForward(), leaderState.speed * dt);
+  // Floor the wheels at runway height during the ground roll.
+  if (t < 0.5) leaderState.pos.y = Math.max(leaderState.pos.y, 5);
   sim.formationFrom = sim.formationTo = plan.team.initialFormation;
   sim.formationT = 1;
 }
@@ -2033,6 +2057,26 @@ function updatePlaneTargets(dt, mod, mt) {
         new THREE.Euler(spreadPitch, 0, spreadRoll, 'XYZ')
       );
       p.targetQuat.copy(lq).multiply(spread);
+    }
+
+    // Per-airframe organic jitter — small uncorrelated body-frame wobbles
+    // so the formation reads like real wingmen riding the bow wave instead
+    // of a rigid CGI lockstep. Skips the leader (i=0) and any plane that
+    // already has a script driving it (BURST / breakaway / rejoin).
+    if (i > 0 && !(mod && (mod.type === 'BOMB_BURST' || mod.type === 'MIRROR_PASS' || mod.type === 'BREAK_LANDING'))) {
+      const tt = sim.time + p.idx * 1.7;
+      const jPitch = Math.sin(tt * 0.62 + p.idx * 0.31) * 0.012;   // ~0.7°
+      const jRoll  = Math.sin(tt * 0.47 + p.idx * 0.83) * 0.022;   // ~1.3°
+      const jYaw   = Math.cos(tt * 0.39 + p.idx * 0.55) * 0.010;   // ~0.6°
+      const wob = new THREE.Quaternion().setFromEuler(
+        new THREE.Euler(jPitch, jYaw, jRoll, 'XYZ')
+      );
+      p.targetQuat.multiply(wob);
+      // Tiny world-space drift so the wingmen don't sit stamped at exact
+      // formation slots. Sub-meter, low-frequency.
+      p.targetPos.x += Math.sin(tt * 0.43 + p.idx * 1.1) * 0.45;
+      p.targetPos.y += Math.cos(tt * 0.51 + p.idx * 0.7) * 0.30;
+      p.targetPos.z += Math.sin(tt * 0.37 + p.idx * 0.8) * 0.45;
     }
 
     // Per-aircraft tasks: superimpose individual scripted behavior on top
@@ -2634,6 +2678,12 @@ document.getElementById('smokeToggle').addEventListener('click', e => {
       if (p.ribbon) for (const e of p.ribbon.ring) e.age = 999;
     }
   }
+});
+document.getElementById('trailPersist').addEventListener('click', e => {
+  ribbonPersist = !ribbonPersist;
+  e.currentTarget.classList.toggle('on', ribbonPersist);
+  // Switching off → ribbons revert to the normal age-based fade. Switching
+  // on → existing entries gain immortality wherever they happen to be.
 });
 // Spacebar = play/pause toggle, common in flight sims.
 addEventListener('keydown', e => {
