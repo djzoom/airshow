@@ -229,6 +229,18 @@ canvas{display:block;touch-action:none}
 #camMenu button#dnToggle{font-size:14px;padding:8px 10px}
 #camMenu button#dnToggle.night{background:#23304a;border-color:#23304a;color:#fce8a8}
 
+/* Cinematic cut flash — 280ms total: 0→1 in 90ms, hold, 1→0 in 190ms */
+#camFade{
+  position:absolute;inset:0;background:#0a0a0a;opacity:0;pointer-events:none;
+  z-index:8;
+}
+#camFade.cut{animation:cutFlash .28s ease-out}
+@keyframes cutFlash{
+  0%{opacity:0}
+  35%{opacity:1}
+  100%{opacity:0}
+}
+
 /* ---------------- Status / announce / legend ---------------- */
 #statusBar{
   position:absolute;top:14px;left:50%;transform:translateX(-50%);
@@ -505,16 +517,14 @@ kbd,#comms button kbd,.comms-hint kbd{
   <main id="viewport">
     <canvas id="canvas"></canvas>
     <div id="camMenu">
-      <button data-cam="cinematic" class="active" title="自动剪辑">CINEMA</button>
-      <button data-cam="orbit_sun" title="逆光剪影绕镜">SUN</button>
-      <button data-cam="pov" title="飞行员视角">POV</button>
-      <button data-cam="leader" title="3rd person 长机后视">CHASE</button>
-      <button data-cam="auto">AUTO</button>
-      <button data-cam="ground" title="观众席">CROWD</button>
-      <button data-cam="wide" title="高空全景">WIDE</button>
-      <button data-cam="free" title="鼠标拖拽自由视角">FREE</button>
+      <button data-cam="show" class="active" title="导演自动剪辑">🎬 SHOW</button>
+      <button data-cam="photog" title="航展摄影师 · 地面长焦">📷 PHOTOG</button>
+      <button data-cam="heli" title="跟拍直升机 · 圆轨道">🚁 HELI</button>
+      <button data-cam="wing" title="僚机视角">✈️ WING</button>
+      <button data-cam="free" title="鼠标拖拽自由视角">🎮 FREE</button>
       <button id="dnToggle" title="昼夜切换">☼</button>
     </div>
+    <div id="camFade"></div>
     <div id="legend">
       <div id="legendName" style="font-weight:bold;margin-bottom:4px;color:#ffd24a"></div>
       <div id="legendRows"></div>
@@ -1612,7 +1622,7 @@ const sim = {
   formationStart: 0, // module-time when morph started
   burstScripts: null,
   pendingRegroup: null,
-  cam: 'cinematic',
+  cam: 'show',
 };
 
 // Leader state: pure quaternion. Plane-forward = -Z in body frame (Three.js convention).
@@ -2220,140 +2230,146 @@ function onModuleEnter(mod) {
 
 // ---------- Camera ----------
 const camTmp = new THREE.Vector3();
-// Camera state: smooth lookAt target so panning stays calm.
+// ============================================================
+// CAMERA SYSTEM — film-crew positions
+// ------------------------------------------------------------
+// Five operator roles instead of eight overlapping modes:
+//   PHOTOG  airshow photographer on the crowd line; long lens,
+//           position locked, only pans/tilts. Hand-held jitter.
+//   HELI    chase helicopter on a wide circular orbit around the
+//           leader. Slight body roll, lens at 45°.
+//   WING    onboard #2 wingmate's cockpit, framing the leader.
+//   SHOW    auto-cut director: swaps among the three above on
+//           module-aware cadences. Triggers a 280ms cut flash.
+//   FREE    OrbitControls — user owns the camera.
+// ============================================================
+
 const camLookAt = new THREE.Vector3(0, 100, 0);
+
+// Lens (FOV deg) per cam role. Smoothly lerped each frame.
+const CAM_FOV = { show:50, photog:30, heli:45, wing:55, free:55 };
+
+// Hand-held noise — small per-axis sine bobs, frequencies coprime so the
+// pattern never repeats.
+function applyHandheld(want, t, amp = 0.4) {
+  want.x += Math.sin(t * 4.1) * amp + Math.sin(t * 9.3) * amp * 0.4;
+  want.y += Math.cos(t * 5.7) * amp * 0.6;
+  want.z += Math.sin(t * 3.2) * amp * 0.5;
+}
+
+// Cinematic cut overlay — single short flash, no permanent transition.
+const camFadeEl = document.getElementById('camFade');
+function triggerCut() {
+  if (!camFadeEl) return;
+  camFadeEl.classList.remove('cut');
+  // force reflow so the animation restarts even when toggled rapidly
+  void camFadeEl.offsetWidth;
+  camFadeEl.classList.add('cut');
+}
+
+// SHOW director state — current sub-cam + when to cut next + last module.
+const showDirector = { sub: 'photog', nextCutAt: 0, lastMod: -1 };
+const SHOW_PICKS_BY_MODULE = {
+  TAKEOFF:        ['photog'],
+  CLIMB:          ['photog','heli'],
+  CRUISE:         ['heli','wing'],
+  FORMATION_CHANGE:['wing','heli'],
+  LOOP:           ['heli'],
+  BARREL_ROLL:    ['heli','wing'],
+  BOMB_BURST:     ['photog','heli'],
+  REGROUP:        ['heli','wing'],
+  MIRROR_PASS:    ['photog','heli'],
+  LOW_PASS:       ['photog'],
+  HIGH_PASS:      ['heli','wing'],
+  BREAK_LANDING:  ['photog'],
+  COBRA:          ['heli'],
+  IMMELMANN:      ['heli'],
+  SPLIT_S:        ['heli'],
+  HAMMERHEAD:     ['heli'],
+  CHANDELLE:      ['heli','wing'],
+};
+
+function pickShowSub(now) {
+  const mod = plan.modules[Math.max(0, sim.curIdx)];
+  // Force a cut whenever the active module changes.
+  if (mod && showDirector.lastMod !== sim.curIdx) {
+    showDirector.lastMod = sim.curIdx;
+    showDirector.nextCutAt = 0;
+  }
+  if (now >= showDirector.nextCutAt) {
+    const candidates = (mod && SHOW_PICKS_BY_MODULE[mod.type]) || ['photog','heli','wing'];
+    let next;
+    do { next = candidates[(Math.random()*candidates.length)|0]; }
+    while (candidates.length > 1 && next === showDirector.sub);
+    showDirector.sub = next;
+    showDirector.nextCutAt = now + 4 + Math.random() * 5;  // 4–9s holds
+    triggerCut();
+  }
+  return showDirector.sub;
+}
+
+// --- Individual camera operators ---
+function camPhotog(now, want, look) {
+  // Photographer on the crowd line (-X side). Position locked; only the
+  // lens zooms and the camera pans/tilts toward the formation centroid.
+  want.set(-280, 8, 60);
+  if (planes.length) look.copy(planes[0].position);
+  applyHandheld(want, now * 0.001, 0.2);
+}
+
+function camHeli(now, want, look) {
+  if (!planes.length) { want.set(0, 200, 0); look.set(0, 0, 0); return; }
+  const lp = planes[0].position;
+  const t = sim.time * 0.18;
+  const r = 75;
+  want.set(lp.x + Math.cos(t) * r, lp.y + 22 + Math.sin(t*0.6)*4, lp.z + Math.sin(t) * r);
+  look.copy(lp);
+  applyHandheld(want, now * 0.001, 0.5);
+}
+
+function camWing(now, want, look) {
+  // Sit just outside #2 wingmate's canopy looking at the leader.
+  if (planes.length < 2) { camHeli(now, want, look); return; }
+  const wing = planes[1];
+  const offset = new THREE.Vector3(0, 0.8, -0.6).applyQuaternion(wing.quaternion);
+  want.copy(wing.position).add(offset);
+  look.copy(planes[0].position);
+  // mild airframe vibration
+  applyHandheld(want, now * 0.001, 0.15);
+}
 
 function updateCamera(dt) {
   const c = sim.cam;
-  // Formation centroid
-  const cx = new THREE.Vector3();
-  for (const p of planes) cx.add(p.position);
-  if (planes.length) cx.divideScalar(planes.length);
-  // Spread tells us how far the planes are flung apart (BURST etc.)
-  let spread = 0;
-  for (const p of planes) spread = Math.max(spread, p.position.distanceTo(cx));
-
-  let want = new THREE.Vector3();
-  let look = cx.clone();
-  let camUp = new THREE.Vector3(0,1,0);
-
-  if (c === 'auto') {
-    // Cinematic orbit anchored at the SHOW CENTER (not the moving formation),
-    // so the camera doesn't chase the leader off into the distance. Distance
-    // grows with current formation spread to keep everyone framed.
-    const t = sim.time * 0.06;
-    const showCenter = new THREE.Vector3(0, Math.max(120, cx.y * 0.6 + 60), 0);
-    const r = 260 + spread * 1.2 + Math.sin(t*0.4) * 40;
-    want.set(
-      showCenter.x + Math.cos(t) * r,
-      showCenter.y + 70 + Math.sin(t*0.7) * 30,
-      showCenter.z + Math.sin(t) * r
-    );
-    look.copy(cx);
-  }
-  else if (c === 'leader' && planes.length) {
-    // Long-tail chase: position derived from leader pose, but smoothed.
-    const lp = planes[0].position;
-    const lq = planes[0].quaternion;
-    const off = camTmp.set(0, 6, 28).applyQuaternion(lq);
-    want.copy(lp).add(off);
-    const aheadV = new THREE.Vector3(0, 1.5, -18).applyQuaternion(lq);
-    look.copy(lp).add(aheadV);
-    // Banked horizon: blend body-up with world-up so it doesn't roll wildly.
-    const bodyUp = new THREE.Vector3(0,1,0).applyQuaternion(lq);
-    camUp.set(0,1,0).lerp(bodyUp, 0.5).normalize();
-  }
-  else if (c === 'ground') {
-    // Spectator stand on the crowd line (-X side). Static position, only
-    // tilt/yaw follows the formation centroid → behaves like real airshow
-    // photography from the apron.
-    want.set(-260, 16, 0);
-    look.copy(cx);
-  }
-  else if (c === 'wide') {
-    // High establishing shot pulled back from the show center, keeps the
-    // entire racetrack in frame.
-    want.set(0, 360 + spread * 0.6, 700 + spread * 0.5);
-    look.set(0, 200, 0);
-  }
-  else if (c === 'free') {
-    // OrbitControls owns the camera in FREE mode. Just keep the orbit
-    // target on the formation centroid so the user can pan around it.
+  if (c === 'free') {
+    const cx = new THREE.Vector3();
+    for (const p of planes) cx.add(p.position);
+    if (planes.length) cx.divideScalar(planes.length);
     orbit.target.lerp(cx.lengthSq() ? cx : new THREE.Vector3(0, 200, 0), 1 - Math.exp(-dt / 0.4));
     orbit.update();
     return;
   }
-  else if (c === 'orbit_sun' && planes.length) {
-    // Backlit silhouette orbit — keeps the formation between camera and
-    // the sun for that classic display-team poster look.
-    const sunDir = sun.position.clone().normalize();
-    const t = sim.time * 0.10;
-    // Camera orbits perpendicular to sun→target axis at a moderate radius.
-    const r = 80 + spread * 1.0;
-    const tangent = new THREE.Vector3(-sunDir.z, 0.3, sunDir.x).normalize();
-    const bitan   = new THREE.Vector3().crossVectors(sunDir, tangent).normalize();
-    const offWorld = sunDir.clone().multiplyScalar(-r * 0.7)
-                          .addScaledVector(tangent, Math.cos(t)*r*0.7)
-                          .addScaledVector(bitan,  Math.sin(t)*r*0.4);
-    want.copy(planes[0].position).add(offWorld);
-    look.copy(planes[0].position);
-  }
-  else if (c === 'pov' && planes.length) {
-    // Pilot eye-point: just behind the cockpit, looking forward.
-    const lp = planes[0].position;
-    const lq = planes[0].quaternion;
-    const off = camTmp.set(0, 1.4, -1.2).applyQuaternion(lq);
-    want.copy(lp).add(off);
-    const aheadV = new THREE.Vector3(0, 1.0, -120).applyQuaternion(lq);
-    look.copy(lp).add(aheadV);
-    const bodyUp = new THREE.Vector3(0,1,0).applyQuaternion(lq);
-    camUp.copy(bodyUp);
-  }
-  else if (c === 'cinematic' && planes.length) {
-    // Auto-cut director: swaps among hero shots based on the active
-    // module so the final video always shows the right angle.
-    const mod = plan.modules[Math.max(0, sim.curIdx)];
-    const t = sim.time;
-    let mode = 'wide-banked';
-    if (!mod) mode = 'wide-banked';
-    else if (mod.type === 'TAKEOFF')         mode = 'crowd-low';
-    else if (mod.type === 'BREAK_LANDING')   mode = 'crowd-low';
-    else if (mod.type === 'BOMB_BURST')      mode = 'overhead';
-    else if (mod.type === 'LOW_PASS')        mode = 'crowd-pan';
-    else if (mod.type === 'MIRROR_PASS')     mode = 'wide-banked';
-    else if (FREE_FLY_MODULES?.has?.(mod.type)) mode = 'orbit-sun';
-    else mode = (Math.floor(t / 6) % 2 === 0) ? 'wide-banked' : 'orbit-sun';
-    if (mode === 'crowd-low') {
-      want.set(-260, 14, -40 + Math.sin(t*0.18) * 30);
-      look.copy(planes[0].position);
-    } else if (mode === 'overhead') {
-      want.copy(cx).add(new THREE.Vector3(40, 220 + spread * 0.4, 60));
-      look.copy(cx);
-    } else if (mode === 'crowd-pan') {
-      want.set(-260 + Math.sin(t*0.05) * 80, 22, 0);
-      look.copy(planes[0].position);
-    } else if (mode === 'orbit-sun') {
-      const sunDir = sun.position.clone().normalize();
-      const r = 100 + spread * 1.1;
-      const tangent = new THREE.Vector3(-sunDir.z, 0.25, sunDir.x).normalize();
-      want.copy(planes[0].position)
-          .addScaledVector(sunDir, -r*0.7)
-          .addScaledVector(tangent, Math.cos(t*0.12)*r*0.7);
-      look.copy(planes[0].position);
-    } else { // wide-banked
-      want.copy(cx).add(new THREE.Vector3(Math.cos(t*0.06)*220, 110 + spread*0.3, Math.sin(t*0.06)*220 + 80));
-      look.copy(cx);
-    }
-  }
+  const want = new THREE.Vector3();
+  const look = new THREE.Vector3();
+  const now = performance.now();
+  let role = c;
+  if (c === 'show') role = pickShowSub(now);
+  if      (role === 'photog') camPhotog(now, want, look);
+  else if (role === 'heli')   camHeli(now, want, look);
+  else if (role === 'wing')   camWing(now, want, look);
+  else                        camPhotog(now, want, look);
 
-  camera.up.copy(camUp);
-  // Time-based smoothing — frame-rate independent. Leader cam is tighter.
-  const tau = c === 'leader' ? 0.18 : 0.5;       // seconds
-  const k = 1 - Math.exp(-dt / tau);
-  camera.position.lerp(want, k);
-  // Smooth the lookAt point too so quick formation shifts (BURST, MIRROR)
-  // don't snap the camera around.
-  camLookAt.lerp(look, 1 - Math.exp(-dt / 0.25));
+  // Smooth FOV (lens) lerp toward target — slow zoom feels cinematic.
+  const targetFov = CAM_FOV[role] || 50;
+  const fovK = 1 - Math.exp(-dt / 0.5);
+  camera.fov += (targetFov - camera.fov) * fovK;
+  camera.updateProjectionMatrix();
+
+  camera.up.set(0, 1, 0);
+  // PHOTOG and WING want a tighter follow than HELI (orbit) so the long
+  // lens doesn't drift; SHOW inherits its sub-cam's tau.
+  const tauPos = role === 'photog' ? 0.5 : role === 'heli' ? 0.6 : 0.35;
+  camera.position.lerp(want, 1 - Math.exp(-dt / tauPos));
+  camLookAt.lerp(look, 1 - Math.exp(-dt / (role === 'photog' ? 0.45 : 0.25)));
   camera.lookAt(camLookAt);
 }
 
