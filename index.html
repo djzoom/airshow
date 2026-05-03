@@ -1587,10 +1587,15 @@ let smokeGlobalOn = true;
 // whole flight history paints the sky like skywriting. Toggled from the
 // SMOKE button area (long-press / dedicated toggle below).
 let ribbonPersist = false;
-const RIBBON_LEN = 160;        // ring entries (was 220 — reduced for perf)
-const RIBBON_DT  = 0.05;       // seconds between samples (20 fps emit)
-const RIBBON_BASE_W = 8.0;     // half-width ≈ J-10 wingspan / 2 (~16m wide)
-const RIBBON_GROW  = 0.10;     // grows ~1.2 m/s — soft diffusion edge
+// Ribbon trail tuning. Real display teams emit colored vapor from a
+// single fuselage-mounted nozzle at ~10–30 ft/s; the visible plume is
+// 0.5–2 m wide at the tail and diffuses over a few hundred meters.
+// We mimic that here: narrow at the head, growing slowly with age.
+const RIBBON_LEN    = 220;        // ring entries (~9 s history at 25Hz)
+const RIBBON_DT     = 0.04;       // seconds between samples (25 Hz emit)
+const RIBBON_BASE_W = 1.1;        // half-width at the head (~2.2 m)
+const RIBBON_GROW   = 0.045;      // half-width grows ~0.5 m/s of life
+const RIBBON_LIFE   = 5.0;        // seconds before a slot fades to 0
 
 function makeRibbon(plane) {
   const n = RIBBON_LEN;
@@ -1666,7 +1671,9 @@ function spawnSmoke(p, dt) {
   // Sample the plane's local right axis so the strip widens across the
   // span direction, just like real wingtip vapor.
   const right = new THREE.Vector3(1,0,0).applyQuaternion(p.quaternion);
-  const back  = new THREE.Vector3(0,-0.3,3.4).applyQuaternion(p.quaternion);
+  // Emit from just behind the tailpipe (rear of the airframe, slightly
+  // below centerline) so the ribbon visually starts where exhaust would.
+  const back = new THREE.Vector3(0, -0.4, 4.2).applyQuaternion(p.quaternion);
   const e = r.ring[r.head];
   e.pos.copy(p.position).add(back);
   e.right.copy(right);
@@ -1684,27 +1691,26 @@ function updateSmoke(p, dt) {
   // Walk newest-to-oldest by reading from r.head backwards. The vertex
   // pair index `i` in the geometry corresponds to ring slot
   // (r.head - 1 - i) mod RIBBON_LEN.
-  // When ribbonPersist is on, each entry survives forever instead of fading
-  // at 4.5 s. Width still grows with age — that's the diffusion of real
-  // colored vapor, which keeps it from looking like a hard-edged ribbon.
+  // When ribbonPersist is on, each entry survives forever instead of
+  // fading at RIBBON_LIFE. Width still grows slowly with age either way
+  // so old trail diffuses into a soft edge.
   const persist = !!ribbonPersist;
-  const lifeMax = persist ? Number.POSITIVE_INFINITY : 4.5;
+  const lifeMax = RIBBON_LIFE;
   for (let i=0;i<RIBBON_LEN;i++) {
     const ringIdx = (r.head - 1 - i + RIBBON_LEN) % RIBBON_LEN;
     const e = r.ring[ringIdx];
     const k = i*2*3;
-    if (!persist && e.age > lifeMax) {
+    const dead = !persist && e.age > lifeMax;
+    const empty = e.age > 1e6;
+    if (dead || empty) {
       alp[i*2] = 0; alp[i*2+1] = 0;
       pos[k] = pos[k+1] = pos[k+2] = pos[k+3] = pos[k+4] = pos[k+5] = 0;
       continue;
     }
-    if (e.age > 1e6) {        // empty slot (initial)
-      alp[i*2] = 0; alp[i*2+1] = 0;
-      pos[k] = pos[k+1] = pos[k+2] = pos[k+3] = pos[k+4] = pos[k+5] = 0;
-      continue;
-    }
-    const wAge = Math.min(e.age, 4.5);
-    const w = RIBBON_BASE_W + wAge * RIBBON_GROW * 12;
+    // Width grows slowly. Cap aging-for-width at lifeMax so persist mode
+    // doesn't keep ballooning forever.
+    const wAge = Math.min(e.age, lifeMax);
+    const w = RIBBON_BASE_W + wAge * RIBBON_GROW;
     pos[k+0] = e.pos.x + e.right.x * w;
     pos[k+1] = e.pos.y + e.right.y * w;
     pos[k+2] = e.pos.z + e.right.z * w;
@@ -1715,12 +1721,11 @@ function updateSmoke(p, dt) {
     col[k+3] = c.r; col[k+4] = c.g; col[k+5] = c.b;
     let a;
     if (persist) {
-      a = 0.78;     // flat opacity — full trail history visible
+      a = 0.85;     // flat opacity — keeps the whole flight history readable
     } else {
+      // Quadratic fade so the head stays bold and the tail dies smoothly.
       const ageK = Math.max(0, 1 - e.age / lifeMax);
-      const distK = Math.max(0, 1 - i / (RIBBON_LEN - 4));
-      // Linear age fade keeps the head bold; old quadratic was crushing it.
-      a = ageK * Math.min(1, distK * 2.2) * 0.92;
+      a = ageK * ageK * 0.95;
     }
     alp[i*2] = a; alp[i*2+1] = a;
   }
