@@ -596,11 +596,10 @@ import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {RGBELoader} from 'three/addons/loaders/RGBELoader.js';
-import {EffectComposer} from 'three/addons/postprocessing/EffectComposer.js';
-import {RenderPass}     from 'three/addons/postprocessing/RenderPass.js';
-import {UnrealBloomPass}from 'three/addons/postprocessing/UnrealBloomPass.js';
-import {SMAAPass}       from 'three/addons/postprocessing/SMAAPass.js';
-import {OutputPass}     from 'three/addons/postprocessing/OutputPass.js';
+// Post-processing (EffectComposer / UnrealBloomPass / SMAAPass / OutputPass)
+// removed. The chain was running ~13 fullscreen passes per frame and
+// stalling the page; the visible effect was negligible after Bloom was
+// dialed to 0. WebGLRenderer's built-in MSAA + ACES tone-map is enough.
 
 /* ================================================================
    AIR SHOW PLANNER
@@ -745,8 +744,6 @@ function resize() {
   renderer.setSize(w, h, false);
   camera.aspect = w/h;
   camera.updateProjectionMatrix();
-  if (typeof composer !== 'undefined' && composer) composer.setSize(w, h);
-  if (typeof bloomPass !== 'undefined' && bloomPass) bloomPass.setSize(w, h);
 }
 // Mobile detection — both pointer:coarse (touch) and small viewport, so
 // we don't accidentally penalise a touch-screen laptop docked to 1440p.
@@ -1579,8 +1576,8 @@ let smokeGlobalOn = true;
 // whole flight history paints the sky like skywriting. Toggled from the
 // SMOKE button area (long-press / dedicated toggle below).
 let ribbonPersist = false;
-const RIBBON_LEN = 220;        // ring entries
-const RIBBON_DT  = 0.030;      // seconds between samples
+const RIBBON_LEN = 160;        // ring entries (was 220 — reduced for perf)
+const RIBBON_DT  = 0.05;       // seconds between samples (20 fps emit)
 const RIBBON_BASE_W = 0.55;    // half-width at the head (units)
 const RIBBON_GROW  = 0.020;    // half-width growth per second of life
 
@@ -1600,14 +1597,15 @@ function makeRibbon(plane) {
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.setAttribute('aAlpha', new THREE.BufferAttribute(alphas, 1));
   geo.setIndex(indices);
-  // Custom shader so we can fade per-vertex without a texture.
+  // ShaderMaterial doesn't auto-declare custom attributes for vertex
+  // colors / alphas — they have to be explicit. Plain pass-through here:
+  // colour from per-vertex `color`, opacity from per-vertex `aAlpha`.
   const mat = new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
-    vertexColors: true,
     blending: THREE.NormalBlending,
-    uniforms: {},
     vertexShader: `
+      attribute vec3 color;
       attribute float aAlpha;
       varying float vAlpha;
       varying vec3 vColor;
@@ -2275,44 +2273,13 @@ function frame(now) {
   // Camera
   updateCamera(dt);
 
-  composer.render();
+  renderer.render(scene, camera);
 
   requestAnimationFrame(frame);
 }
 
-// ---------- Post-processing chain ----------
-// RenderPass writes the linear scene into an HDR float target;
-// UnrealBloomPass adds a soft halo around HDR-bright pixels (smoke
-// trails get vColor*1.55 in the ribbon shader, well past threshold);
-// SMAAPass removes aliasing on long thin edges (skipped on mobile);
-// OutputPass does the final tone map + sRGB conversion. We have to
-// neutralise the renderer's own tonemap so it isn't applied twice.
-const composer = new EffectComposer(renderer);
-composer.setPixelRatio(renderer.getPixelRatio());
-composer.addPass(new RenderPass(scene, camera));
-const bloomPass = new UnrealBloomPass(
-  new THREE.Vector2(canvas.clientWidth || 1, canvas.clientHeight || 1),
-  /*strength*/ 0.0,    // off — was washing the daylight scene to white
-  /*radius*/   0.5,
-  /*threshold*/2.0
-);
-composer.addPass(bloomPass);
-if (!IS_MOBILE) composer.addPass(new SMAAPass(canvas.clientWidth || 1, canvas.clientHeight || 1));
-const outputPass = new OutputPass();
-composer.addPass(outputPass);
-// We render the scene LINEAR, let Bloom add HDR halos, then OutputPass
-// performs ACES tone mapping + sRGB conversion on the way to the screen.
-renderer.toneMapping = THREE.NoToneMapping;
-outputPass.material.uniforms.toneMappingExposure = { value: 1.0 };
-// (OutputPass picks up renderer.toneMappingExposure at draw time)
-renderer.toneMappingExposure = 1.0;
-// Tell OutputPass which curve to apply
-outputPass.material.defines = outputPass.material.defines || {};
-// Three's OutputShader switch is THREE.LinearToneMapping/etc as numeric
-// constants. Defaulting renderer.toneMapping back to ACES is enough since
-// OutputPass copies it at .render() time.
+// Tone mapping handled directly by the renderer now (no OutputPass).
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-// Ensure both renderer + composer are sized to the live layout.
 resize();
 
 
