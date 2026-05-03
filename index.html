@@ -769,9 +769,9 @@ let dayNight = 'day';
 const skyTop = new THREE.Color(SKY.day.top);
 const skyBot = new THREE.Color(SKY.day.bot);
 scene.background = skyBot.clone();
-scene.fog = new THREE.Fog(SKY.day.fog, 800, 5500);
+scene.fog = new THREE.Fog(SKY.day.fog, 4000, 22000);
 
-const camera = new THREE.PerspectiveCamera(55, 1, 0.5, 9000);
+const camera = new THREE.PerspectiveCamera(55, 1, 0.5, 35000);
 camera.position.set(80, 150, 600);
 
 addEventListener('resize', resize);
@@ -847,7 +847,7 @@ function applyDayNight() {
 // IBL stays consistent with the visible sky.
 import {Sky} from './vendor/three/examples/jsm/objects/Sky.js';
 const sky = new Sky();
-sky.scale.setScalar(8000);
+sky.scale.setScalar(20000);
 scene.add(sky);
 const skyU = sky.material.uniforms;
 // Initial values match SKY.day in applyDayNight() — keeps the sky a
@@ -904,8 +904,11 @@ queueMicrotask(async () => {
 // (Clouds removed — sphere-cluster billboards read as plastic; the Sky
 //  shader's atmospheric haze carries the high-altitude depth cue alone.)
 
-// Ground
-const groundGeo = new THREE.PlaneGeometry(9000, 9000, 80, 80);
+// Ground — 30 km square so the leader can wander far past the airport
+// without falling off the world. Vertex displacement is dampened with
+// distance so the far edges stay flat and the LOD doesn't show seams.
+const GROUND_SIZE = 30000;
+const groundGeo = new THREE.PlaneGeometry(GROUND_SIZE, GROUND_SIZE, 120, 120);
 groundGeo.rotateX(-Math.PI/2);
 {
   const pos = groundGeo.attributes.position;
@@ -913,7 +916,11 @@ groundGeo.rotateX(-Math.PI/2);
     const x = pos.getX(i), z = pos.getZ(i);
     const r = Math.hypot(x, z);
     let h = Math.sin(x*0.0028)*Math.cos(z*0.0031)*5 + Math.sin(x*0.0009+z*0.0007)*8;
-    if (r < 800) h *= Math.max(0,(r-200)/600);
+    if (r < 800) h *= Math.max(0, (r - 200) / 600);
+    // Flatten as we approach the horizon ring so distant terrain reads
+    // as a calm haze line, not a jagged silhouette.
+    const flatten = Math.max(0, 1 - r / 12000);
+    h *= flatten;
     pos.setY(i, h);
   }
   groundGeo.computeVertexNormals();
@@ -1077,20 +1084,23 @@ function tryLoadSatelliteImagery(venue) {
   if (local) {
     local.colorSpace = THREE.SRGBColorSpace;
     local.wrapS = local.wrapT = THREE.RepeatWrapping;
-    local.repeat.set(2, 2);
+    local.repeat.set(8, 8);
     local.anisotropy = 8;
     groundMat.map = local; groundMat.color.set(0xffffff); groundMat.needsUpdate = true;
     return;
   }
   // 2. Apply procedural fallback immediately so it's never blank
   const proc = makeProceduralSatTex();
-  proc.repeat.set(6, 6);
+  proc.repeat.set(20, 20);   // 30km / ~1.5km texture cell
   groundMat.map = proc; groundMat.color.set(0xffffff); groundMat.needsUpdate = true;
   // 3. Async-upgrade to real Esri imagery if reachable (CORS open, no key)
   try {
     const sat = await tryLoadSatelliteImagery(SHOW_VENUES[currentVenueKey]);
     if (sat) {
-      sat.repeat.set(1, 1);
+      // The Esri tile mosaic covers the immediate venue; tile it across
+      // the wider 30 km ground plane so distant terrain stays textured.
+      sat.wrapS = sat.wrapT = THREE.RepeatWrapping;
+      sat.repeat.set(3, 3);
       groundMat.map = sat; groundMat.needsUpdate = true;
       console.log('[ground] satellite imagery loaded for venue', currentVenueKey);
     }
@@ -2434,7 +2444,7 @@ function applyShowAreaConstraint(dt, mod) {
   const x = leaderState.pos.x, z = leaderState.pos.z;
   const dist = Math.hypot(x, z);
   // Inside this radius the leader is free to do whatever the module wants.
-  const innerR = 450, outerR = 1100;
+  const innerR = 800, outerR = 2200;
   if (dist < innerR) return;
   // Desired heading = toward the show center
   const fwd = leaderForward();
@@ -2644,7 +2654,11 @@ function bindSetup() {
     (async () => {
       try {
         const sat = await tryLoadSatelliteImagery(SHOW_VENUES[currentVenueKey]);
-        if (sat) { sat.repeat.set(1, 1); groundMat.map = sat; groundMat.needsUpdate = true; }
+        if (sat) {
+          sat.wrapS = sat.wrapT = THREE.RepeatWrapping;
+          sat.repeat.set(3, 3);
+          groundMat.map = sat; groundMat.needsUpdate = true;
+        }
       } catch(_) {}
     })();
   });
