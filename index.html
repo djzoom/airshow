@@ -522,6 +522,7 @@ kbd,#comms button kbd,.comms-hint kbd{
       <button data-cam="photog" title="航展摄影师 · 地面长焦">📷 PHOTOG</button>
       <button data-cam="heli" title="跟拍直升机 · 圆轨道">🚁 HELI</button>
       <button data-cam="wing" title="僚机视角">✈️ WING</button>
+      <button data-cam="follow" title="跟随长机 · 鼠标控角度">🎯 FOLLOW</button>
       <button data-cam="free" title="鼠标拖拽自由视角">🎮 FREE</button>
     </div>
     <div id="camFade"></div>
@@ -2449,6 +2450,25 @@ function updateCamera(dt) {
     orbit.update();
     return;
   }
+  if (c === 'follow') {
+    // OrbitControls is enabled; target rides on the leader so the camera
+    // is bolted to the plane's position, but the user owns yaw / pitch /
+    // distance via mouse. The (camera - target) offset is preserved
+    // automatically by OrbitControls every time we shift target.
+    if (planes.length) {
+      const lp = planes[0].position;
+      const tau = 0.06;       // how tightly the target tracks (s)
+      const k = 1 - Math.exp(-dt / tau);
+      const prev = orbit.target.clone();
+      orbit.target.lerp(lp, k);
+      // Translate the camera by the same delta so the framing stays
+      // consistent — without this the camera would seem to drift away.
+      const delta = new THREE.Vector3().subVectors(orbit.target, prev);
+      camera.position.add(delta);
+    }
+    orbit.update();
+    return;
+  }
   const want = new THREE.Vector3();
   const look = new THREE.Vector3();
   const now = performance.now();
@@ -2937,7 +2957,7 @@ document.querySelectorAll('#camMenu button[data-cam]').forEach(b => {
     document.querySelectorAll('#camMenu button[data-cam]').forEach(x => x.classList.remove('active'));
     b.classList.add('active');
     sim.cam = b.dataset.cam;
-    orbit.enabled = sim.cam === 'free';
+    orbit.enabled = (sim.cam === 'free' || sim.cam === 'follow');
     if (orbit.enabled) {
       // Seed orbit position from current camera so the transition is seamless.
       orbit.update();
