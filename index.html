@@ -696,10 +696,20 @@ function rebuildSchedule() {
 // Returns offset in leader's local frame:
 //   +X right, +Y up, +Z behind leader (leader nose is -Z)
 const FORMATIONS = {
-  TRAIL: (n, i) => new THREE.Vector3(0, -i*1.0, i*16),
+  // All formations stay at y=0 relative to the leader so reset puts every
+  // wingman on the same runway plane; the user reported aircraft poking
+  // through the slab when offsets dipped below the leader.
+  // TRAIL also alternates ±X each rank to avoid jet-wash collision behind
+  // the leader and keep horizontal separation visible during taxi.
+  TRAIL: (n, i) => {
+    if (i === 0) return new THREE.Vector3(0, 0, 0);
+    const side = (i % 2 === 1) ? -1 : 1;
+    const rank = Math.ceil(i / 2);
+    return new THREE.Vector3(side * 4, 0, rank * 22);
+  },
   LINE:  (n, i) => new THREE.Vector3((i-(n-1)/2)*16, 0, 0),
-  ECHELON_R: (n, i) => new THREE.Vector3(i*12, -i*0.5, i*9),
-  ECHELON_L: (n, i) => new THREE.Vector3(-i*12, -i*0.5, i*9),
+  ECHELON_R: (n, i) => new THREE.Vector3(i*14, 0, i*10),
+  ECHELON_L: (n, i) => new THREE.Vector3(-i*14, 0, i*10),
   V: (n, i) => {
     if (i === 0) return new THREE.Vector3(0, 0, 0);
     const half = Math.ceil(i/2);
@@ -1579,8 +1589,8 @@ let smokeGlobalOn = true;
 let ribbonPersist = false;
 const RIBBON_LEN = 160;        // ring entries (was 220 — reduced for perf)
 const RIBBON_DT  = 0.05;       // seconds between samples (20 fps emit)
-const RIBBON_BASE_W = 0.55;    // half-width at the head (units)
-const RIBBON_GROW  = 0.020;    // half-width growth per second of life
+const RIBBON_BASE_W = 8.0;     // half-width ≈ J-10 wingspan / 2 (~16m wide)
+const RIBBON_GROW  = 0.10;     // grows ~1.2 m/s — soft diffusion edge
 
 function makeRibbon(plane) {
   const n = RIBBON_LEN;
@@ -1605,6 +1615,7 @@ function makeRibbon(plane) {
     transparent: true,
     depthWrite: false,
     blending: THREE.NormalBlending,
+    side: THREE.DoubleSide,         // strip is unwound into both directions
     vertexShader: `
       attribute vec3 color;
       attribute float aAlpha;
@@ -1619,8 +1630,10 @@ function makeRibbon(plane) {
       varying float vAlpha;
       varying vec3 vColor;
       void main() {
-        if (vAlpha < 0.005) discard;
-        gl_FragColor = vec4(vColor, vAlpha);
+        if (vAlpha < 0.02) discard;
+        // Slight gamma boost so the colored vapor stays readable against
+        // the bright daylight sky.
+        gl_FragColor = vec4(vColor * 1.15, vAlpha);
       }`,
   });
   const mesh = new THREE.Mesh(geo, mat);
@@ -1706,7 +1719,8 @@ function updateSmoke(p, dt) {
     } else {
       const ageK = Math.max(0, 1 - e.age / lifeMax);
       const distK = Math.max(0, 1 - i / (RIBBON_LEN - 4));
-      a = ageK * ageK * Math.min(1, distK * 2.2) * 0.85;
+      // Linear age fade keeps the head bold; old quadratic was crushing it.
+      a = ageK * Math.min(1, distK * 2.2) * 0.92;
     }
     alp[i*2] = a; alp[i*2+1] = a;
   }
@@ -2144,6 +2158,14 @@ function updatePlaneTargets(dt, mod, mt) {
     // Convert to world frame
     const wp = off.clone().applyQuaternion(lq);
     p.targetPos.copy(lp).add(wp);
+
+    // Floor every plane above the runway slab during the ground roll so
+    // followers can't dip beneath it just because their formation slot
+    // happens to drift low. Once airborne the floor stops mattering.
+    if (mod && mod.type === 'TAKEOFF') {
+      const groundY = (RUNWAY_TOP_Y || 0) + 3;
+      if (p.targetPos.y < groundY) p.targetPos.y = groundY;
+    }
 
     // Special behavior for landing: drop to runway during peel
     if (mod && mod.type === 'BREAK_LANDING') {
