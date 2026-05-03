@@ -930,6 +930,78 @@ const ground = new THREE.Mesh(groundGeo, groundMat);
 ground.receiveShadow = true;
 scene.add(ground);
 
+// ---------- Distant mountain silhouette ----------
+// A single triangle-strip ring at ~22 km that gives the horizon a layered
+// height profile instead of a perfectly flat haze line. Heights are a
+// 3-octave deterministic noise around the azimuth so the same venue
+// always shows the same ridge skyline. fog tints it into the sky for free.
+{
+  const N = 192;
+  const RADIUS = 22000;
+  const positions = new Float32Array(N * 4 * 3);
+  const indices  = [];
+  for (let i = 0; i < N; i++) {
+    const a1 = (i / N) * Math.PI * 2;
+    const a2 = ((i + 1) / N) * Math.PI * 2;
+    const x1 = Math.cos(a1) * RADIUS, z1 = Math.sin(a1) * RADIUS;
+    const x2 = Math.cos(a2) * RADIUS, z2 = Math.sin(a2) * RADIUS;
+    function ridgeHeight(angle) {
+      // Multi-octave: a few wide ranges, a few sharp peaks
+      const h =
+        Math.sin(angle * 1.7  + 0.7)  * 700 +
+        Math.sin(angle * 4.3  + 2.1)  * 400 +
+        Math.sin(angle * 9.1  + 5.4)  * 220 +
+        Math.sin(angle * 17.3 + 1.9)  * 110;
+      return Math.max(120, 800 + h);
+    }
+    const h1 = ridgeHeight(a1);
+    const h2 = ridgeHeight(a2);
+    const base = i * 4;
+    positions[(base + 0) * 3]     = x1; positions[(base + 0) * 3 + 1] = 0;  positions[(base + 0) * 3 + 2] = z1;
+    positions[(base + 1) * 3]     = x2; positions[(base + 1) * 3 + 1] = 0;  positions[(base + 1) * 3 + 2] = z2;
+    positions[(base + 2) * 3]     = x1; positions[(base + 2) * 3 + 1] = h1; positions[(base + 2) * 3 + 2] = z1;
+    positions[(base + 3) * 3]     = x2; positions[(base + 3) * 3 + 1] = h2; positions[(base + 3) * 3 + 2] = z2;
+    indices.push(base + 0, base + 1, base + 2);
+    indices.push(base + 1, base + 3, base + 2);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  const mat = new THREE.MeshStandardMaterial({
+    color:0x6c7a8d, roughness:1, metalness:0,
+    fog:true,         // let scene fog haze it into the sky tone
+    side:THREE.DoubleSide,
+  });
+  const mountains = new THREE.Mesh(geo, mat);
+  mountains.frustumCulled = false;
+  mountains.receiveShadow = false;
+  scene.add(mountains);
+}
+
+// ---------- Coastline water (per-venue) ----------
+// Zhuhai 金湾 sits on the Pearl River estuary; the southeast quadrant is
+// open water out to Macau. Each venue can declare its own water rectangle
+// (or skip it) and we toggle the mesh on venue change.
+const waterMat = new THREE.MeshStandardMaterial({
+  color:0x4f6f86, roughness:0.35, metalness:0.05,
+  envMapIntensity:0.7, transparent:true, opacity:0.94,
+});
+const waterMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1, 16, 16), waterMat);
+waterMesh.rotation.x = -Math.PI / 2;
+waterMesh.position.y = 0.6;
+waterMesh.visible = false;
+scene.add(waterMesh);
+
+function applyVenueWater(venue) {
+  const w = venue && venue.water;
+  if (!w) { waterMesh.visible = false; return; }
+  waterMesh.visible = true;
+  waterMesh.scale.set(w.w, 1, w.h);
+  waterMesh.position.x = w.cx;
+  waterMesh.position.z = w.cz;
+}
+
 // ---------- Satellite imagery (optional) ----------
 // Three sources, in order of preference:
 //   1. local "ground.jpg" if a user drops one in the repo;
@@ -951,6 +1023,10 @@ const SHOW_VENUES = {
     airportModel: 'airport.glb',
     airportRotY: 0,
     airportOffset: { x: 0, z: 0 },
+    // Pearl River estuary lies SE of the airfield. Coordinates are in
+    // the engine's runway-aligned frame (after the satellite tile is
+    // pre-rotated by runwayHeading), so SE = (+X, +Z) quadrant.
+    water: { cx: 6500, cz: 7500, w: 22000, h: 18000 },
   },
   NANYUAN: {
     label: '北京·南苑 NAY',
@@ -1109,6 +1185,7 @@ function tryLoadSatelliteImagery(venue) {
 
 // Kick off the venue's airport.glb load now that the constants are ready.
 queueMicrotask(() => loadAirportFromVenue(SHOW_VENUES[currentVenueKey]));
+queueMicrotask(() => applyVenueWater(SHOW_VENUES[currentVenueKey]));
 queueMicrotask(() => applyDayNight());
 
 // ---------- Airport scene ----------
@@ -2649,6 +2726,7 @@ function bindSetup() {
   document.getElementById('venuePreset').addEventListener('change', e => {
     currentVenueKey = e.target.value;
     loadAirportFromVenue(SHOW_VENUES[currentVenueKey]);
+    applyVenueWater(SHOW_VENUES[currentVenueKey]);
     // Reload satellite imagery for the new venue (procedural fallback stays
     // visible while the new tiles fetch).
     (async () => {
