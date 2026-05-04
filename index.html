@@ -3533,8 +3533,8 @@ document.getElementById('floatPlay').addEventListener('click', () => {
   sim.playing = !sim.playing;
   syncPlayUI();
 });
-// Floating comms shortcut — opens the same DCS-style call menu that ` does.
-document.getElementById('floatComms').addEventListener('click', () => toggleComms());
+// (Floating ⌨ comms shortcut removed from the visible chrome — the ` key
+//  still toggles the call menu for power users.)
 document.getElementById('smokeToggle').addEventListener('click', e => {
   TRAIL_PARAMS.enabled = !TRAIL_PARAMS.enabled;
   e.currentTarget.classList.toggle('on', TRAIL_PARAMS.enabled);
