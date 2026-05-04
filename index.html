@@ -2231,25 +2231,12 @@ function updatePlaneTargets(dt, mod, mt) {
     const wp = off.clone().applyQuaternion(lq);
     p.targetPos.copy(lp).add(wp);
 
-    // Staggered takeoff: each wingman holds in line on the runway until
-    // its launch slot, then peels out and joins the leader. The visual
-    // effect is the classic "press" — leader rolls first, #2 follows
-    // ~5 s later, #3 a bit after that, etc. Z position scales with i so
-    // wingmen don't sit on top of each other in the queue.
+    // TAKEOFF floor: stop any wingman's formation slot from dipping
+    // below the runway slab during the ground roll. Real teams roll out
+    // as a tight V together — no per-wingman delay, no chase-takeoff.
     if (mod && mod.type === 'TAKEOFF') {
       const groundY = (RUNWAY_TOP_Y || 0) + 3;
-      const STAGGER = 5;          // seconds between successive launches
-      const launchT = i * STAGGER;
-      if (i > 0 && mt < launchT) {
-        // Hold in queue: stack along the runway centerline at +Z behind
-        // the threshold, slightly ±X so they're visible to each other.
-        const queueZ = 700 + i * 38;
-        const side = (i % 2 === 1) ? -1 : 1;
-        p.targetPos.set(side * 5, groundY, queueZ);
-        p.targetQuat.copy(leaderState.quat);
-      } else if (p.targetPos.y < groundY) {
-        p.targetPos.y = groundY;
-      }
+      if (p.targetPos.y < groundY) p.targetPos.y = groundY;
     }
 
     // Special behavior for landing: drop to runway during peel
