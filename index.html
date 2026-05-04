@@ -215,8 +215,12 @@ canvas{display:block;touch-action:none}
 
 /* ---------------- Camera bar ---------------- */
 #camMenu{
-  position:absolute;top:14px;left:14px;display:flex;gap:6px;z-index:10;
+  position:absolute;top:14px;left:70px;right:14px;
+  display:flex;gap:6px;z-index:10;
+  overflow-x:auto;overflow-y:hidden;white-space:nowrap;scrollbar-width:none;
 }
+#camMenu::-webkit-scrollbar{display:none}
+#camMenu button{flex:0 0 auto}
 #camMenu button{
   background:rgba(255,255,255,.92);backdrop-filter:blur(8px);
   border:1px solid rgba(0,0,0,.06);color:var(--ink);
@@ -370,30 +374,52 @@ kbd,#comms button kbd,.comms-hint kbd{
 .scroll::-webkit-scrollbar-thumb{background:var(--rule);border-radius:3px}
 .scroll::-webkit-scrollbar-thumb:hover{background:var(--ink-faint)}
 
-/* ---------------- Mobile ---------------- */
-#burger,#drawer-scrim{display:none}
+/* ---------------- Drawer planner (all viewports) ---------------- */
+/* Even on desktop the planner is collapsed by default so the 3D show
+   gets the whole frame. The burger button sits top-left always; clicking
+   it slides in the planner. Click outside (scrim) to dismiss. */
+#app{grid-template-columns:1fr;grid-template-rows:1fr}
+#planner{
+  position:fixed;left:0;top:0;bottom:0;width:min(86vw,380px);z-index:40;
+  transform:translateX(-100%);transition:transform .24s ease;
+  box-shadow:var(--shadow-lg);
+}
+#planner.open{transform:translateX(0)}
+body.drawer-open #drawer-scrim{opacity:1;pointer-events:auto}
+#drawer-scrim{
+  position:fixed;inset:0;background:rgba(20,20,20,.35);z-index:35;
+  opacity:0;pointer-events:none;transition:opacity .24s ease;
+  display:flex;
+}
+#burger{
+  position:fixed;left:14px;top:calc(14px + env(safe-area-inset-top));z-index:50;
+  width:42px;height:42px;border-radius:12px;
+  background:rgba(255,255,255,.94);backdrop-filter:blur(8px);
+  border:1px solid rgba(0,0,0,.08);
+  display:flex;align-items:center;justify-content:center;cursor:pointer;
+  color:var(--ink);font-size:20px;box-shadow:var(--shadow-md);
+  transition:transform .15s, box-shadow .15s;
+}
+#burger:hover{transform:translateY(-1px);box-shadow:var(--shadow-lg)}
+
+#floatBar{
+  position:fixed;left:66px;top:calc(14px + env(safe-area-inset-top));z-index:50;
+  display:flex;align-items:center;gap:8px;
+  background:rgba(255,255,255,.94);backdrop-filter:blur(8px);
+  border:1px solid rgba(0,0,0,.08);border-radius:12px;
+  padding:0 12px 0 0;height:42px;box-shadow:var(--shadow-md);
+}
+#floatPlay{
+  background:var(--accent);border:none;color:#fff;
+  width:42px;height:42px;border-radius:12px 0 0 12px;
+  font-size:16px;cursor:pointer;font-weight:700;
+}
+#floatPlay:hover{background:var(--accent-2)}
+#floatPlay.playing{background:var(--ink);}
+#floatTime{font-family:var(--mono);font-size:13px;color:var(--ink);min-width:90px;text-align:center}
+
+/* Mobile-only tweaks to camera bar / status / comms etc. */
 @media (max-width:900px){
-  #app{grid-template-columns:1fr;grid-template-rows:1fr}
-  #planner{
-    position:fixed;left:0;top:0;bottom:0;width:min(86vw,360px);z-index:40;
-    transform:translateX(-100%);transition:transform .24s ease;
-    box-shadow:var(--shadow-lg);
-  }
-  #planner.open{transform:translateX(0)}
-  body.drawer-open #drawer-scrim{opacity:1;pointer-events:auto}
-  #drawer-scrim{
-    position:fixed;inset:0;background:rgba(20,20,20,.45);z-index:35;
-    opacity:0;pointer-events:none;transition:opacity .24s ease;
-    display:flex;
-  }
-  #burger{
-    position:fixed;left:14px;top:calc(14px + env(safe-area-inset-top));z-index:50;
-    width:40px;height:40px;border-radius:10px;
-    background:rgba(255,255,255,.94);backdrop-filter:blur(8px);
-    border:1px solid rgba(0,0,0,.06);
-    display:flex;align-items:center;justify-content:center;cursor:pointer;
-    color:var(--ink);font-size:18px;box-shadow:var(--shadow-md);
-  }
   #camMenu{
     flex-direction:row;left:64px;right:14px;top:calc(14px + env(safe-area-inset-top));gap:6px;
     overflow-x:auto;overflow-y:hidden;white-space:nowrap;scrollbar-width:none;
@@ -409,7 +435,6 @@ kbd,#comms button kbd,.comms-hint kbd{
   #comms button{padding:9px 10px;font-size:13px;min-height:38px}
   #timeline{left:14px;right:14px;bottom:max(14px,env(safe-area-inset-bottom));padding:12px 14px}
   #tl-track{height:14px}
-  #burger,#drawer-scrim{display:flex}
 }
 @media (max-width:600px){
   #planner h1{font-size:17px;padding:14px 16px 0}
@@ -421,6 +446,10 @@ kbd,#comms button kbd,.comms-hint kbd{
 <body>
 <div id="app">
   <button id="burger" title="菜单">☰</button>
+  <div id="floatBar">
+    <button id="floatPlay" class="primary" title="开始/暂停 (Space)">▶</button>
+    <span id="floatTime">00:00 / 03:18</span>
+  </div>
   <div id="drawer-scrim"></div>
   <aside id="planner" class="scroll">
     <h1>飞行表演规划系统</h1>
@@ -473,6 +502,12 @@ kbd,#comms button kbd,.comms-hint kbd{
 
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--rule)">
         <div class="hint" style="margin-bottom:6px">航迹 / TRAIL</div>
+        <div class="field"><label>形态 / Mode</label>
+          <select id="trMode">
+            <option value="dual">双股 · Dual</option>
+            <option value="single">单股 · Single</option>
+            <option value="wingtip">翼端 · Wingtip</option>
+          </select></div>
         <div class="field"><label>宽度 / Width (m)</label>
           <input id="trWidth" type="range" min="0.4" max="4.0" step="0.1" value="1.1"></div>
         <div class="field"><label>寿命 / Life (s)</label>
@@ -1514,26 +1549,11 @@ class Plane {
     const targetLen = modelScale || 8;
     const bbMax = template.userData.bbMax || 1;
     m.scale.setScalar(targetLen / bbMax);
-    // After scale + recentering the airframe sits roughly with its belly
-    // at -modelScale*0.25 in local Y. Anything noticeably lower than that
-    // is almost certainly landing gear / ventral antenna / drop tank —
-    // tag them so the airframe can hide them after lift-off.
-    m.updateMatrixWorld(true);
-    const whole = new THREE.Box3().setFromObject(m);
-    const wholeH = whole.max.y - whole.min.y;
-    const gearThreshold = whole.min.y + wholeH * 0.32;
+    // Gear-hide heuristic disabled: it cut legitimate Su-27 body parts
+    // and didn't actually catch MB-339's gear. Restoring it requires
+    // hand-tagged "gear" nodes inside the GLBs (Blender export).
+    m.traverse(c => { if (c.isMesh) c.castShadow = true; });
     this.gear = [];
-    m.traverse(c => {
-      if (!c.isMesh) return;
-      c.castShadow = true;
-      const b = new THREE.Box3().setFromObject(c);
-      const cy = (b.min.y + b.max.y) / 2;
-      const sz = b.getSize(new THREE.Vector3());
-      const small = Math.max(sz.x, sz.z) < (whole.max.x - whole.min.x) * 0.35;
-      if (cy < gearThreshold && small && sz.y < wholeH * 0.45) {
-        this.gear.push(c);
-      }
-    });
     this.group.add(m);
   }
   // Hide / show the gear group based on whether wheels can plausibly be
@@ -1620,6 +1640,8 @@ for (const ps of Object.values(TEAM_PRESETS)) loadModelOnce(ps.model, ps.modelOr
 const TRAIL_PARAMS = {
   enabled:  true,    // global on / off (was TRAIL_PARAMS.enabled)
   persist:  false,   // skywriting mode (was TRAIL_PARAMS.persist)
+  mode:     'dual',  // 'single' (one centered strand) | 'dual' (twin nozzle)
+                     //   | 'wingtip' (wide spacing for vortex-style trails)
   width:    1.1,     // half-width at the head, metres
   grow:     0.045,   // half-width gain per second of age
   life:     5.0,     // seconds before a slot fades to 0 (ignored if persist)
@@ -1719,19 +1741,26 @@ function spawnSmoke(p, dt) {
   r.fillTimer += dt;
   if (r.fillTimer < RIBBON_DT) return;
   r.fillTimer = 0;
-  // Local axes — strand offset is TRAIL_PARAMS.track along the body's right axis.
+  // Strand offset depends on the selected smoke mode:
+  //   single  → both strands write the same centerline point (1 visible
+  //             plume; setting opacity higher compensates for overdraw)
+  //   dual    → twin nozzles ±track from centerline (default)
+  //   wingtip → wide spacing for the vortex-trail look (track*2.4)
   const right = new THREE.Vector3(1,0,0).applyQuaternion(p.quaternion);
   const back  = new THREE.Vector3(0, -0.4, 4.2).applyQuaternion(p.quaternion);
-  // Centre point: just behind the tailpipe.
   const cx = p.position.x + back.x;
   const cy = p.position.y + back.y;
   const cz = p.position.z + back.z;
+  let off;
+  switch (TRAIL_PARAMS.mode) {
+    case 'single':  off = 0; break;
+    case 'wingtip': off = TRAIL_PARAMS.track * 2.4; break;
+    default:        off = TRAIL_PARAMS.track;
+  }
   // Left strand
   {
     const e = r.left.ring[r.left.head];
-    e.pos.set(cx - right.x * TRAIL_PARAMS.track,
-              cy - right.y * TRAIL_PARAMS.track,
-              cz - right.z * TRAIL_PARAMS.track);
+    e.pos.set(cx - right.x * off, cy - right.y * off, cz - right.z * off);
     e.right.copy(right);
     e.age = 0;
     r.left.head = (r.left.head + 1) % RIBBON_LEN;
@@ -1739,9 +1768,7 @@ function spawnSmoke(p, dt) {
   // Right strand
   {
     const e = r.right.ring[r.right.head];
-    e.pos.set(cx + right.x * TRAIL_PARAMS.track,
-              cy + right.y * TRAIL_PARAMS.track,
-              cz + right.z * TRAIL_PARAMS.track);
+    e.pos.set(cx + right.x * off, cy + right.y * off, cz + right.z * off);
     e.right.copy(right);
     e.age = 0;
     r.right.head = (r.right.head + 1) % RIBBON_LEN;
@@ -2909,6 +2936,12 @@ function bindTrailSliders() {
   wire('trTrack',   'track');
   wire('trOpacity', 'opacity');
   wire('trGrow',    'grow');
+  // Mode select (string, not number) — wire by hand.
+  const modeEl = document.getElementById('trMode');
+  if (modeEl) {
+    modeEl.value = TRAIL_PARAMS.mode;
+    modeEl.addEventListener('change', () => { TRAIL_PARAMS.mode = modeEl.value; });
+  }
 }
 bindTrailSliders();
 
@@ -2937,6 +2970,14 @@ bindTrailSliders();
 document.getElementById('play').addEventListener('click', () => { sim.playing = true; });
 document.getElementById('pause').addEventListener('click', () => { sim.playing = false; });
 document.getElementById('restart').addEventListener('click', () => { rebuildAndReset(); sim.playing = true; });
+// Floating mini-transport on the viewport (visible even when the drawer
+// planner is closed). Click toggles play/pause; the timer mirrors the
+// detailed time readout.
+document.getElementById('floatPlay').addEventListener('click', e => {
+  sim.playing = !sim.playing;
+  e.currentTarget.classList.toggle('playing', sim.playing);
+  e.currentTarget.textContent = sim.playing ? '⏸' : '▶';
+});
 document.getElementById('smokeToggle').addEventListener('click', e => {
   TRAIL_PARAMS.enabled = !TRAIL_PARAMS.enabled;
   e.currentTarget.classList.toggle('on', TRAIL_PARAMS.enabled);
