@@ -1610,6 +1610,11 @@ class Plane {
     // pull more than ~7G. Eliminates the lerp-snap "teleport-catchup"
     // behaviour that broke immersion during formation changes.
     this.velocity = new THREE.Vector3();
+    // Snapshot of targetPos at the start of the previous frame. The
+    // pursuit controller uses (targetPos - _tpPrev)/dt as a velocity
+    // feedforward so the wingman matches a moving formation slot
+    // without the steady-state lag a pure-feedback law gives.
+    this._tpPrev = new THREE.Vector3();
     this.smokeOn = true;
     this.smoke = []; // pooled smoke meshes
     this.smokeTimer = 0;
@@ -1992,6 +1997,10 @@ const leaderState = {
   // Module-time at which rotation began. -1 = haven't rotated yet.
   // Set by MOD_TAKEOFF on the first frame past V_R, reset by resetSim.
   _rotateT: -1,
+  // Commanded body roll (radians). Mixed into levelQuat / climbQuat so
+  // module-level alignLeaderTo() preserves the bank a turn controller
+  // commands, instead of fighting it back to wings-level every frame.
+  bankBias: 0,
 };
 
 function leaderForward() {
@@ -2020,11 +2029,31 @@ function alignLeaderTo(target, rate, dt) {
 }
 
 // World-frame target quaternions, parameterized by current heading.
+// bankBias is folded into the roll component so the module's alignLeaderTo
+// pulls toward a banked attitude instead of constantly fighting any roll
+// the turn controller commands.
 function levelQuat() {
-  return _q.setFromEuler(new THREE.Euler(0, leaderHeading(), 0, 'YXZ')).clone();
+  return _q.setFromEuler(new THREE.Euler(0, leaderHeading(), leaderState.bankBias, 'YXZ')).clone();
 }
 function climbQuat(pitch, roll = 0) {
-  return _q.setFromEuler(new THREE.Euler(pitch, leaderHeading(), roll, 'YXZ')).clone();
+  return _q.setFromEuler(new THREE.Euler(pitch, leaderHeading(), roll + leaderState.bankBias, 'YXZ')).clone();
+}
+
+// Extract the "our +Z body-roll" component of the current attitude.
+// Positive = right wing rotated up toward world +Y (left aviation bank).
+const _bodyXProbe = new THREE.Vector3();
+function leaderBank() {
+  _bodyXProbe.set(1, 0, 0).applyQuaternion(leaderState.quat);
+  return Math.asin(Math.max(-1, Math.min(1, _bodyXProbe.y)));
+}
+
+// Pre-multiply by a yaw rotation around world +Y. Used by the coordinated
+// turn so heading changes happen in the world frame even while the body
+// is banked (a body-frame yaw on a banked plane mostly produces world roll).
+const _wY = new THREE.Vector3(0, 1, 0);
+function applyWorldYaw(rate, dt) {
+  const dq = new THREE.Quaternion().setFromAxisAngle(_wY, rate * dt);
+  leaderState.quat.premultiply(dq).normalize();
 }
 
 function resetSim() {
@@ -2045,6 +2074,7 @@ function resetSim() {
   leaderState.quat.identity();   // forward = -Z
   leaderState.speed = 0;
   leaderState._rotateT = -1;
+  leaderState.bankBias = 0;
 
   buildFleet(plan.team.size, TEAM_PRESETS[plan.preset]);
   for (let i=0;i<planes.length;i++) {
@@ -2056,6 +2086,7 @@ function resetSim() {
     p.quaternion.copy(leaderState.quat);
     p.targetPos.copy(p.position);
     p.targetQuat.copy(p.quaternion);
+    p._tpPrev.copy(p.targetPos);
     p.apply();
   }
 }
@@ -2555,62 +2586,68 @@ function frame(now) {
   const dt = Math.min(0.05, (now - lastT) / 1000) * sim.speed;
   lastT = now;
 
+  // Snapshot every plane's current targetPos BEFORE advanceSim updates it.
+  // We use (targetPos − _tpPrev)/dt as a velocity feedforward in the
+  // pursuit law below, so wingmen actually move with their slot instead
+  // of trailing it by err·v/ω.
+  for (const p of planes) p._tpPrev.copy(p.targetPos);
+
   if (sim.playing && sim.time < sim.totalTime) {
     advanceSim(dt);
   }
 
-  // Pursuit: PD controller with velocity + acceleration caps so wingmen
-  // can never appear to teleport. Exception: TAKEOFF locks the formation
-  // rigidly to the leader (display teams roll out as one element).
+  // Pursuit: PD controller + slot-velocity feedforward + caps. Without
+  // feedforward a leader at 120 m/s leaves a 60 m steady-state lag; with
+  // it the wingman matches the slot's velocity at zero error and only
+  // uses the feedback term to close real position deviation.
   const curMod = (sim.curIdx >= 0) ? plan.modules[sim.curIdx] : null;
   const rigid = curMod && curMod.type === 'TAKEOFF';
   const turnK = 1 - Math.exp(-5 * dt);
-  const MAX_SPEED = 160;          // m/s ≈ Mach 0.5 — generous wingman cap
+  const MAX_SPEED = 180;          // m/s — wingman top end (slightly above leader cruise)
   const MAX_ACCEL = 7 * 9.81;     // 7 G — combat persistent limit
   const _toTarget = new THREE.Vector3();
   const _desiredV = new THREE.Vector3();
   const _accel    = new THREE.Vector3();
+  const _slotV    = new THREE.Vector3();
+  const dtSafe = Math.max(dt, 1/240);
   for (let pi = 0; pi < planes.length; pi++) {
     const p = planes[pi];
+    // Slot velocity = how far the formation slot has moved this frame.
+    _slotV.subVectors(p.targetPos, p._tpPrev).divideScalar(dtSafe);
     if (rigid && pi > 0) {
       // Element-takeoff: snap so wingmen mirror leader's physics exactly.
+      // Seed velocity with the slot's velocity so the moment the rigid
+      // hold lifts the pursuit controller doesn't see a 0 → leaderV
+      // step it has to close at 7 G over ~2 s (which would visually
+      // rip the formation apart by ~100 m).
       p.position.copy(p.targetPos);
       p.quaternion.copy(p.targetQuat);
-      // Reset velocity so the moment we leave TAKEOFF the controller
-      // doesn't think the wingman was "moving" by leader-displacement.
-      p.velocity.set(0, 0, 0);
+      p.velocity.copy(_slotV);
     } else if (pi === 0) {
       // Leader is driven directly by leaderState (already physical).
       p.position.copy(p.targetPos);
       p.quaternion.copy(p.targetQuat);
-      p.velocity.set(0, 0, 0);
+      p.velocity.copy(_slotV);
     } else {
-      // Follower PD: aim a desired velocity at the target slot, clip to
-      // MAX_SPEED, then clip the implied acceleration to MAX_ACCEL.
+      // Follower: feedforward + critically-damped feedback.
       _toTarget.subVectors(p.targetPos, p.position);
       const dist = _toTarget.length();
-      // Critically-damped pursuit: v* = ω · err. Pick ω so a 50 m gap
-      // closes in ~0.6 s without overshoot — fast enough to reform but
-      // not so aggressive that it asks for >7G.
-      const omega = 2.0;
-      _desiredV.copy(_toTarget).multiplyScalar(omega);
+      // Lower ω now that feedforward carries the bulk of the work; keeps
+      // the response soft and avoids over-reactive accel on small errors.
+      const omega = 1.5;
+      _desiredV.copy(_slotV).addScaledVector(_toTarget, omega);
       if (_desiredV.lengthSq() > MAX_SPEED * MAX_SPEED) {
         _desiredV.setLength(MAX_SPEED);
       }
-      // Acceleration needed this frame to reach desiredV.
-      _accel.subVectors(_desiredV, p.velocity).divideScalar(Math.max(dt, 1/240));
+      _accel.subVectors(_desiredV, p.velocity).divideScalar(dtSafe);
       const aMag = _accel.length();
       if (aMag > MAX_ACCEL) _accel.multiplyScalar(MAX_ACCEL / aMag);
-      // Integrate.
       p.velocity.addScaledVector(_accel, dt);
       p.position.addScaledVector(p.velocity, dt);
-      // Quaternion still uses slerp — orientation isn't constrained the
-      // same way. The wingmen visually point along velocity via
-      // formation-pursuit anyway.
       p.quaternion.slerp(p.targetQuat, turnK);
-      // If we're already very close, snap velocity to leader's in-frame
-      // displacement so the wingman doesn't drift on stationary formations.
-      if (dist < 0.5) p.velocity.multiplyScalar(0.6);
+      // Settled-formation damping: when very near the slot, decay the
+      // residual velocity so the wingman doesn't drift on micro-noise.
+      if (dist < 0.5) p.velocity.lerp(_slotV, 0.5);
     }
     p.apply();
     p.updateGear(dt);
@@ -2921,23 +2958,38 @@ function applyShowAreaConstraint(dt, mod) {
   if (!mod || FREE_FLY_MODULES.has(mod.type)) return;
   const x = leaderState.pos.x, z = leaderState.pos.z;
   const dist = Math.hypot(x, z);
-  // Inside this radius the leader is free to do whatever the module wants.
   const innerR = 800, outerR = 2200;
-  if (dist < innerR) return;
-  // Desired heading = toward the show center
-  const fwd = leaderForward();
-  const desiredYaw = Math.atan2(-x, -z);
-  const currentYaw = Math.atan2(-fwd.x, -fwd.z);
-  let dy = desiredYaw - currentYaw;
-  while (dy >  Math.PI) dy -= 2*Math.PI;
-  while (dy < -Math.PI) dy += 2*Math.PI;
-  // Strength ramps from 0 at innerR to full at outerR.
-  const strength = Math.min(1, (dist - innerR) / (outerR - innerR));
-  const yawRate = Math.sign(dy) * Math.min(Math.abs(dy), 0.5) * strength;
-  rotateLeaderBody(0, yawRate, 0, dt);
-  // Add a small coordinated bank so the turn looks like a turn, not a skid.
-  const bank = -Math.sign(dy) * 0.4 * strength;
-  rotateLeaderBody(0, 0, (bank - 0) * dt * 1.5, dt);
+
+  let targetBank = 0;
+  if (dist >= innerR) {
+    // How much do we need to turn back toward show center?
+    const fwd = leaderForward();
+    const desiredYaw = Math.atan2(-x, -z);
+    const currentYaw = Math.atan2(-fwd.x, -fwd.z);
+    let dy = desiredYaw - currentYaw;
+    while (dy >  Math.PI) dy -= 2*Math.PI;
+    while (dy < -Math.PI) dy += 2*Math.PI;
+    const strength = Math.min(1, (dist - innerR) / (outerR - innerR));
+    // Bank up to 60°. Sign convention: dy > 0 means we need to yaw +Y
+    // (heading increase, i.e. right turn), which in our roll convention
+    // is achieved with negative bank (right wing down).
+    const maxBank = Math.PI / 3;
+    targetBank = -Math.sign(dy) * Math.min(Math.abs(dy) * 1.6, maxBank) * strength;
+  }
+  // Smooth bank command toward target (~0.5 s τ). The actual airframe
+  // rolls in via the module's alignLeaderTo, which now reads bankBias.
+  leaderState.bankBias += (targetBank - leaderState.bankBias) * (1 - Math.exp(-dt / 0.5));
+
+  // Coordinated turn: yaw rate from g·tan(φ)/V, applied in WORLD frame
+  // so the heading actually rotates while the body stays banked. Skip
+  // when the body isn't really rolled in yet — a wings-level plane
+  // shouldn't yaw, that's a skidding flat turn.
+  const currentBank = leaderBank();
+  if (Math.abs(currentBank) > 0.10) {
+    const V = Math.max(40, leaderState.speed);
+    const yawRate = -9.81 * Math.tan(currentBank) / V;
+    applyWorldYaw(yawRate, dt);
+  }
 }
 
 // ---------- UI ----------
