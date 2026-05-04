@@ -1294,6 +1294,108 @@ let RUNWAY_TOP_Y = 0;
 const airportGroup = new THREE.Group();
 scene.add(airportGroup);
 
+// ---------- Procedural textures for the bare airport.glb materials ----------
+// The hand-modeled airport ships with named PBR materials but zero texture
+// maps — every surface renders as a flat colour, which reads as a plastic
+// mock-up. We synthesize CanvasTexture maps at startup and assign them by
+// material name, so 'ground', 'wall', 'ceiling' etc. pick up their own
+// procedural detail. UVs are present on every primitive, so the texture
+// repeats predictably without needing a triplanar shader.
+function makeProceduralTexture(size, draw) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  draw(c.getContext('2d'), size);
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 4;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+function makeAsphaltTexture() {
+  return makeProceduralTexture(512, (g, s) => {
+    // Base dark grey
+    g.fillStyle = '#2a2c2f'; g.fillRect(0, 0, s, s);
+    // Fine grit noise (subtle)
+    const img = g.getImageData(0, 0, s, s);
+    for (let i = 0; i < img.data.length; i += 4) {
+      const n = (Math.random() - 0.5) * 24;
+      img.data[i]   = Math.max(0, Math.min(255, img.data[i]   + n));
+      img.data[i+1] = Math.max(0, Math.min(255, img.data[i+1] + n));
+      img.data[i+2] = Math.max(0, Math.min(255, img.data[i+2] + n));
+    }
+    g.putImageData(img, 0, 0);
+    // Coarser tar patches
+    g.globalAlpha = 0.15;
+    for (let i = 0; i < 24; i++) {
+      g.fillStyle = Math.random() < 0.5 ? '#1a1c1f' : '#3a3d40';
+      const x = Math.random() * s, y = Math.random() * s, r = 12 + Math.random() * 30;
+      g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+    }
+    g.globalAlpha = 1.0;
+    // A pale runway centerline stripe down the middle
+    g.fillStyle = 'rgba(220,210,180,0.35)';
+    g.fillRect(s/2 - 2, 0, 4, s);
+  });
+}
+function makeConcreteTexture() {
+  return makeProceduralTexture(512, (g, s) => {
+    g.fillStyle = '#cfc6b3'; g.fillRect(0, 0, s, s);
+    const img = g.getImageData(0, 0, s, s);
+    for (let i = 0; i < img.data.length; i += 4) {
+      const n = (Math.random() - 0.5) * 28;
+      img.data[i]   = Math.max(0, Math.min(255, img.data[i]   + n));
+      img.data[i+1] = Math.max(0, Math.min(255, img.data[i+1] + n));
+      img.data[i+2] = Math.max(0, Math.min(255, img.data[i+2] + n - 4));
+    }
+    g.putImageData(img, 0, 0);
+    // Hairline cracks for visual interest at close range
+    g.strokeStyle = 'rgba(60,55,45,0.35)'; g.lineWidth = 1;
+    for (let i = 0; i < 6; i++) {
+      g.beginPath();
+      let x = Math.random() * s, y = Math.random() * s;
+      g.moveTo(x, y);
+      for (let k = 0; k < 20; k++) {
+        x += (Math.random() - 0.5) * 30;
+        y += (Math.random() - 0.5) * 30;
+        g.lineTo(x, y);
+      }
+      g.stroke();
+    }
+  });
+}
+function makeMetalPanelTexture() {
+  return makeProceduralTexture(512, (g, s) => {
+    g.fillStyle = '#9aa0a6'; g.fillRect(0, 0, s, s);
+    // Horizontal panel seams every 64 px
+    g.strokeStyle = 'rgba(40,45,55,0.55)'; g.lineWidth = 1.5;
+    for (let y = 0; y < s; y += 64) {
+      g.beginPath(); g.moveTo(0, y); g.lineTo(s, y); g.stroke();
+    }
+    // Vertical seams
+    g.strokeStyle = 'rgba(40,45,55,0.35)';
+    for (let x = 0; x < s; x += 128) {
+      g.beginPath(); g.moveTo(x, 0); g.lineTo(x, s); g.stroke();
+    }
+    // Subtle brightness banding
+    const img = g.getImageData(0, 0, s, s);
+    for (let i = 0; i < img.data.length; i += 4) {
+      const n = (Math.random() - 0.5) * 16;
+      img.data[i]   = Math.max(0, Math.min(255, img.data[i]   + n));
+      img.data[i+1] = Math.max(0, Math.min(255, img.data[i+1] + n));
+      img.data[i+2] = Math.max(0, Math.min(255, img.data[i+2] + n));
+    }
+    g.putImageData(img, 0, 0);
+  });
+}
+const _texAsphalt   = makeAsphaltTexture();
+const _texConcrete  = makeConcreteTexture();
+const _texMetal     = makeMetalPanelTexture();
+// Per-material texture repeats — material is reused across many meshes,
+// so we set tiling by world-scale guesses (large hangars get bigger tiles).
+_texAsphalt.repeat.set(40, 40);
+_texConcrete.repeat.set(8, 8);
+_texMetal.repeat.set(6, 6);
+
 // Crowd-line marker stays explicit so the camera ground view has a
 // reference, no matter what the glb provides.
 {
@@ -1339,6 +1441,40 @@ function loadAirportFromVenue(venue) {
     // shadow pass was a non-trivial GPU cost for static geometry that
     // mostly sits outside the shadow camera's 800m frustum anyway.
     m.traverse(c => { if (c.isMesh) { c.castShadow = false; c.receiveShadow = true; }});
+    // Bind procedural textures to the named materials so the bare-colour
+    // hangars/runway pick up surface detail. We mutate the material in
+    // place rather than swapping it — keeps the GLB's other PBR settings
+    // (baseColorFactor, metalness etc.) where they've been authored.
+    m.traverse(c => {
+      if (!c.isMesh || !c.material) return;
+      const mats = Array.isArray(c.material) ? c.material : [c.material];
+      for (const mat of mats) {
+        if (!mat || mat.userData._textured) continue;
+        const name = (mat.name || '').toLowerCase();
+        if (name === 'ground') {
+          mat.map = _texAsphalt;
+          mat.color && mat.color.setHex(0xb0b0b0);
+          mat.roughness = 0.92;
+          mat.metalness = 0.02;
+        } else if (name === 'wall' || name === 'column') {
+          mat.map = _texConcrete;
+          mat.color && mat.color.setHex(0xeae3d2);
+          mat.roughness = 0.78;
+          mat.metalness = 0.02;
+        } else if (name === 'ceiling') {
+          mat.map = _texMetal;
+          mat.color && mat.color.setHex(0xd6d8dc);
+          mat.roughness = 0.55;
+          mat.metalness = 0.35;
+        } else if (name === 'glass') {
+          // Already an alpha-blended glass; just sharpen reflectivity.
+          mat.roughness = 0.05;
+          mat.metalness = 0.0;
+        }
+        mat.userData._textured = true;
+        mat.needsUpdate = true;
+      }
+    });
     // Detect runway slab top: pick the mesh with the longest Z extent
     // that is at most a meter or two thick (the actual tarmac strip),
     // and remember its world-space top so planes never spawn through it.
@@ -1651,7 +1787,11 @@ class Plane {
   // even though the mesh isn't actually translating into a bay.
   updateGear(dt) {
     const agl = this.position.y - (RUNWAY_TOP_Y || 0);
-    this.gearTarget = agl < 8 ? 1.0 : 0.0;
+    // Force gear out during the BREAK_LANDING module so it's visible all
+    // the way down the approach, not just at the last 8 m. Otherwise
+    // pure AGL gating gives a "wheels-pop-out-as-they-touch" cartoon.
+    const force = sim && sim.gearForce;
+    this.gearTarget = (force || agl < 8) ? 1.0 : 0.0;
     if (!this.gear.length) return;
     const tauUp   = 0.6;       // retracting (target lower than current)
     const tauDown = 1.4;       // extending
@@ -1986,6 +2126,7 @@ const sim = {
   burstScripts: null,
   pendingRegroup: null,
   cam: 'show',
+  gearForce: false,    // landing module sets this true; gear extends regardless of AGL
 };
 
 // Leader state: pure quaternion. Plane-forward = -Z in body frame (Three.js convention).
@@ -2066,6 +2207,7 @@ function resetSim() {
   sim.pendingRegroup = null;
   sim.mirrorPhase = 0;
   sim.landingPhase = 0;
+  sim.gearForce = false;
 
   // Wheels sit on the actual GLB runway top + some clearance for the
   // airframe's bbox-center-to-belly distance (~3 units for these scales).
@@ -2277,19 +2419,64 @@ function MOD_HIGH_PASS(mod, mt, dur, dt) {
   moveLeaderForward(dt, plan.speed.cruise);
 }
 
+// Four-phase landing: pattern descent → 3° final approach → flare → rollout.
+// Each phase has its own attitude and speed schedule; horizontal motion is
+// computed from a Y-zeroed leaderForward so the body's pitch doesn't fight
+// the explicit altitude target. Gear stays down throughout (sim.gearForce).
 function MOD_BREAK_LANDING(mod, mt, dur, dt) {
-  const t = mt/dur;
-  if (t < 0.7) {
-    // Glide-path descent
-    const targetAlt = Math.max(20, plan.alt.cruise * (1 - t/0.7));
-    leaderState.pos.y += (targetAlt - leaderState.pos.y) * 0.6 * dt;
-    alignLeaderTo(climbQuat(-0.06), 2, dt);
-    moveLeaderForward(dt, plan.speed.cruise * (1 - t*0.4));
-  } else {
-    // Flare and touch down
-    leaderState.pos.y = Math.max((RUNWAY_TOP_Y||0) + 3, leaderState.pos.y - 8*dt);
-    alignLeaderTo(levelQuat(), 2, dt);
-    moveLeaderForward(dt, Math.max(20, leaderState.speed - 25*dt));
+  const t = mt / dur;
+  const groundY = (RUNWAY_TOP_Y || 0) + 3;
+  sim.gearForce = true;
+
+  // All horizontal motion uses a flat forward vector — the body's pitch
+  // is purely cosmetic during landing, the trajectory is set by altitude
+  // schedule + glide-slope sink rate.
+  const fwdH = leaderForward(); fwdH.y = 0;
+  if (fwdH.lengthSq() > 1e-6) fwdH.normalize();
+
+  if (t < 0.45) {
+    // Phase 1 — pattern descent. Cruise alt → 220 m, slight nose-down.
+    const tt = t / 0.45;
+    const altGoal = plan.alt.cruise + (220 - plan.alt.cruise) * easeInOut(tt);
+    leaderState.pos.y += (altGoal - leaderState.pos.y) * 1.2 * dt;
+    alignLeaderTo(climbQuat(-0.04), 2, dt);
+    const sp = plan.speed.cruise + (plan.speed.cruise * 0.7 - plan.speed.cruise) * easeInOut(tt);
+    leaderState.speed = approach(leaderState.speed, sp, 6, dt);
+    leaderState.pos.addScaledVector(fwdH, leaderState.speed * dt);
+  }
+  else if (t < 0.85) {
+    // Phase 2 — final approach. 3° glide slope from 220 m to ~12 m AGL,
+    // speed bleeds to Vref ~70 m/s. Body pitched -3° (typical for jets
+    // with low AOA on approach — visually matches the descent path).
+    const tt = (t - 0.45) / 0.40;
+    const altGoal = 220 + (12 - 220) * easeInOut(tt);
+    leaderState.pos.y += (altGoal - leaderState.pos.y) * 1.6 * dt;
+    if (leaderState.pos.y < groundY + 3) leaderState.pos.y = groundY + 3;
+    alignLeaderTo(climbQuat(-0.05), 2.5, dt);
+    const sp = plan.speed.cruise * 0.7 + (70 - plan.speed.cruise * 0.7) * easeInOut(tt);
+    leaderState.speed = approach(leaderState.speed, sp, 5, dt);
+    leaderState.pos.addScaledVector(fwdH, leaderState.speed * dt);
+  }
+  else if (t < 0.94) {
+    // Phase 3 — flare. Pitch up from -3° to +6°; sink rate decays from
+    // glide-path value (~3.6 m/s) to ~0.5 m/s at touchdown. Speed eases
+    // toward 55 m/s.
+    const tt = (t - 0.85) / 0.09;
+    const targetPitch = -0.05 + (0.10 - (-0.05)) * easeInOut(tt);
+    alignLeaderTo(climbQuat(targetPitch), 4, dt);
+    const sinkStart = 70 * Math.sin(3 * Math.PI / 180);
+    const sinkRate  = sinkStart * (1 - easeInOut(tt)) + 0.5 * easeInOut(tt);
+    leaderState.pos.y = Math.max(groundY, leaderState.pos.y - sinkRate * dt);
+    leaderState.speed = approach(leaderState.speed, 55, 4, dt);
+    leaderState.pos.addScaledVector(fwdH, leaderState.speed * dt);
+  }
+  else {
+    // Phase 4 — rollout. Wheels glued. Wings firmly level, brakes on,
+    // decelerate to taxi (~18 m/s).
+    leaderState.pos.y = groundY;
+    alignLeaderTo(levelQuat(), 4, dt);
+    leaderState.speed = approach(leaderState.speed, 18, 18, dt);
+    leaderState.pos.addScaledVector(fwdH, leaderState.speed * dt);
   }
   sim.formationFrom = sim.formationTo = 'TRAIL';
   sim.formationT = 1;
@@ -2692,6 +2879,9 @@ function advanceSim(dt) {
   const dur = mod.duration;
 
   // Run module
+  // Default per-frame transient flags off; the module fn opts in if it
+  // needs them. Avoids gearForce sticking true after BREAK_LANDING ends.
+  sim.gearForce = false;
   const fn = MODULE_FN[mod.type];
   if (fn) fn(mod, mt, dur, dt);
 
