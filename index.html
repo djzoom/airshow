@@ -476,22 +476,22 @@ body.drawer-open #drawer-scrim{opacity:1;pointer-events:auto}
       <div class="fb-stage" id="fbStage">— STAND BY —</div>
       <div class="fb-meta"><span id="fbTime">00:00</span>&nbsp;·&nbsp;NEXT&nbsp;<span id="fbNext">…</span></div>
     </div>
-    <button id="floatComms" class="ghost" title="呼叫菜单 (`)">⌨</button>
+    <!-- Comms shortcut moved off the main strip — press ` to open the call
+         menu, keeps the visible chrome to play + stage only. -->
   </div>
   <div id="drawer-scrim"></div>
   <aside id="planner" class="scroll">
     <h1>飞行表演规划系统</h1>
     <h2>AIR SHOW PLANNER · v1.1</h2>
 
-    <!-- Always-visible transport row at the very top — the most-used controls. -->
+    <!-- Always-visible transport row — only the three core actions plus
+         the speed scrubber. Trail toggles live in the trail panel below. -->
     <section id="topbar">
       <div id="transport">
         <button id="play" class="primary" title="开始/继续 (Space)">▶ 起飞</button>
         <button id="pause" title="暂停">⏸</button>
         <button id="restart" title="重置">⟲</button>
         <span class="speedwrap">×<span id="spdLabel">1.0</span><input id="simSpeed" type="range" min="0.25" max="4" step="0.25" value="1"></span>
-        <button id="smokeToggle" class="toggle on" title="航迹烟雾开关">TRAIL</button>
-        <button id="trailPersist" class="toggle" title="航迹全程保留 / fade">∞</button>
         <span class="time" id="time">00:00 / 00:00</span>
       </div>
     </section>
@@ -530,6 +530,10 @@ body.drawer-open #drawer-scrim{opacity:1;pointer-events:auto}
 
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--rule)">
         <div class="hint" style="margin-bottom:6px">航迹 / TRAIL</div>
+        <div class="field" style="display:flex;gap:6px">
+          <button id="smokeToggle" class="toggle on" title="航迹烟雾开关" style="flex:1">显示</button>
+          <button id="trailPersist" class="toggle" title="航迹全程保留 / fade" style="flex:1">永久</button>
+        </div>
         <div class="field"><label>形态 / Mode</label>
           <select id="trMode">
             <option value="dual">双股 · Dual</option>
@@ -593,17 +597,20 @@ body.drawer-open #drawer-scrim{opacity:1;pointer-events:auto}
 
   <main id="viewport">
     <canvas id="canvas"></canvas>
+    <!-- Camera bar trimmed to the 4 essential modes for spectator viewing.
+         WING / HELI / FOLLOW are still selectable via the SHOW director
+         (which auto-cuts between sub-cams) or programmatically. -->
     <div id="camMenu">
-      <button data-cam="show" class="active" title="导演自动剪辑">🎬 SHOW</button>
-      <button data-cam="photog" title="航展摄影师 · 地面长焦">📷 PHOTOG</button>
-      <button data-cam="heli" title="跟拍直升机 · 圆轨道">🚁 HELI</button>
-      <button data-cam="wing" title="僚机视角">✈️ WING</button>
-      <button data-cam="tail"   title="尾追 · 紧贴长机 6 点钟">🛩 TAIL</button>
-      <button data-cam="follow" title="跟随长机 · 鼠标控角度">🎯 FOLLOW</button>
-      <button data-cam="free"   title="鼠标拖拽自由视角">🎮 FREE</button>
+      <button data-cam="show" class="active" title="导演自动剪辑">🎬 自动 SHOW</button>
+      <button data-cam="photog" title="航展摄影师 · 地面长焦">📷 摄影师</button>
+      <button data-cam="tail"   title="尾追 · 紧贴长机 6 点钟">🛩 尾追</button>
+      <button data-cam="free"   title="鼠标拖拽自由视角">🎮 自由</button>
     </div>
     <div id="camFade"></div>
-    <div id="legend">
+    <!-- Legend hidden by default; uncomment if you want preset-color
+         attribution overlaid on the show. The team identity is implied
+         by the airframes themselves so this is rarely useful. -->
+    <div id="legend" style="display:none">
       <div id="legendName" style="font-weight:bold;margin-bottom:4px;color:#ffd24a"></div>
       <div id="legendRows"></div>
     </div>
@@ -1934,13 +1941,13 @@ const TRAIL_PARAMS = {
   enabled:  true,
   persist:  false,
   mode:     'dual',   // 'single' | 'dual' | 'wingtip'
-  width:    0.8,      // initial puff radius (m) — small at the nozzle
-  grow:     2.2,      // radius growth (m/s) — puff inflates as it ages
-  life:     4.0,      // particle lifetime (s)
-  track:    3.5,      // dual/wingtip nozzle half-spacing (m)
-  opacity:  0.85,
-  ringLen:  220,      // particles per plane (dual mode emits 2 / tick)
-  emitDt:   0.040,    // emission interval (s) — 25 Hz keeps overdraw sane
+  width:    1.4,      // initial puff radius (m) — bigger nozzle for visibility
+  grow:     3.5,      // radius growth (m/s) — puff really blooms
+  life:     6.0,      // particle lifetime (s) — longer trail behind the jet
+  track:    3.0,      // dual/wingtip nozzle half-spacing (m)
+  opacity:  0.95,
+  ringLen:  320,      // particles per plane — denser plume
+  emitDt:   0.025,    // emission interval (s) — 40 Hz, continuous-looking stream
 };
 
 // Drift constants — gentle so old smoke "settles" instead of hovering.
@@ -1971,8 +1978,8 @@ const trailPointsMat = new THREE.ShaderMaterial({
       vColor = aColor;
       vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
       // Perspective sizing: pixel size = world radius * (focal / depth)
-      gl_PointSize = aSize * (320.0 / max(1.0, -mvPos.z));
-      gl_PointSize = clamp(gl_PointSize, 2.0, 220.0);
+      gl_PointSize = aSize * (450.0 / max(1.0, -mvPos.z));
+      gl_PointSize = clamp(gl_PointSize, 3.0, 320.0);
       gl_Position = projectionMatrix * mvPos;
     }`,
   fragmentShader: `
@@ -1988,8 +1995,8 @@ const trailPointsMat = new THREE.ShaderMaterial({
       float disk = (1.0 - r2);
       disk *= disk;                   // squared falloff = soft puff
       // Hot-core glow: warm-white bloom at the freshest emission.
-      vec3 col = mix(vColor, vec3(1.0, 0.95, 0.85), vHead * 0.45);
-      col *= 1.0 + vHead * 0.55;
+      vec3 col = mix(vColor, vec3(1.0, 0.95, 0.85), vHead * 0.55);
+      col *= 1.15 + vHead * 0.85;
       gl_FragColor = vec4(col, disk * vAlpha);
     }`,
 });
@@ -2244,6 +2251,8 @@ function resetSim() {
   sim.landingPhase = 0;
   sim.gearForce = false;
   sim._landingEntry = null;
+  sim._landingSnapped = false;
+  sim._oneShotRigid = false;
 
   // Wheels sit on the actual GLB runway top + some clearance for the
   // airframe's bbox-center-to-belly distance (~3 units for these scales).
@@ -2457,90 +2466,85 @@ function MOD_HIGH_PASS(mod, mt, dur, dt) {
   moveLeaderForward(dt, plan.speed.cruise);
 }
 
-// Four-phase landing aimed at the detected runway centerline.
-//   Phase 1 (0–30 %)  — repositioning: smooth lerp from wherever the
-//                       previous module left us to the start-of-final
-//                       point (centred over the runway, 4 km out, 220 m).
-//   Phase 2 (30–85 %) — 3° glide straight down the centerline to 12 m.
-//   Phase 3 (85–94 %) — flare: pitch up, sink rate decays.
-//   Phase 4 (94–100%) — rollout on the centerline, brakes to taxi speed.
+// Geometric landing on the detected runway centerline. The entire
+// formation is RIGID-SNAPPED to the approach gate on entry so the
+// leader doesn't have to teleport across the world during phase 1
+// (which previously forced wingmen to chase at 200+ m/s and fly
+// sideways relative to their own quaternions). After the snap the
+// leader flies a normal 3° glide → flare → rollout at realistic
+// speeds so the PD-clipped wingmen track perfectly.
 function MOD_BREAK_LANDING(mod, mt, dur, dt) {
   const t = mt / dur;
   const groundY = (RUNWAY_TOP_Y || 0) + 3;
   sim.gearForce = true;
 
-  // Capture entry pose on the first frame so phase 1 has a fixed source.
-  if (!sim._landingEntry) {
-    sim._landingEntry = {
-      x: leaderState.pos.x, y: leaderState.pos.y, z: leaderState.pos.z,
-    };
-  }
-  const entry = sim._landingEntry;
-
-  // Final-approach geometry. We come in from +Z (NEAR end is +Z because
-  // identity quaternion = facing -Z) so the approach point sits 4 km past
-  // RUNWAY_NEAR_Z, and we glide all the way to the threshold.
-  const APPROACH_OUT  = 4000;
-  const APPROACH_ALT  = 220;
-  const TOUCHDOWN_X   = RUNWAY_CTR_X;
-  const TOUCHDOWN_Z   = RUNWAY_NEAR_Z;            // touchdown zone
+  // Approach geometry — gate is 3 km out at 180 m on the runway centerline.
+  const APPROACH_OUT  = 3000;
+  const APPROACH_ALT  = 180;
   const APPROACH_X    = RUNWAY_CTR_X;
   const APPROACH_Z    = RUNWAY_NEAR_Z + APPROACH_OUT;
-  const ROLLOUT_END_Z = RUNWAY_FAR_Z + 60;        // stop short of opposite end
+  const TOUCHDOWN_X   = RUNWAY_CTR_X;
+  const VREF          = 70;     // m/s — final approach airspeed
+  const VTOUCH        = 55;     // m/s — touchdown speed
+  const VTAXI         = 18;
 
-  if (t < 0.30) {
-    // Phase 1 — fly to the approach gate (smoothly).
-    const tt = easeInOut(t / 0.30);
-    leaderState.pos.x = entry.x + (APPROACH_X   - entry.x) * tt;
-    leaderState.pos.y = entry.y + (APPROACH_ALT - entry.y) * tt;
-    leaderState.pos.z = entry.z + (APPROACH_Z   - entry.z) * tt;
-    // Aim heading at -Z (runway-aligned). bankBias stays 0; we just
-    // rotate toward the runway-aligned level attitude smoothly.
-    leaderState.quat.slerp(
-      _q.setFromEuler(new THREE.Euler(-0.03, 0, 0, 'YXZ')).clone(),
-      1 - Math.exp(-dt / 0.8)
-    );
-    leaderState.speed = approach(leaderState.speed, plan.speed.cruise * 0.7, 6, dt);
+  // One-shot rigid snap: leader to gate, formation to slots, all velocities
+  // to the gate forward velocity. The frame loop checks sim._oneShotRigid
+  // for one tick to also snap wingmen so no one lags.
+  if (!sim._landingSnapped) {
+    sim._landingSnapped = true;
+    sim._oneShotRigid = true;
+    leaderState.pos.set(APPROACH_X, APPROACH_ALT, APPROACH_Z);
+    leaderState.quat.identity();          // facing -Z = down the runway
+    leaderState.speed = VREF + 10;
+    leaderState.bankBias = 0;
+    leaderState._rotateT = -1;
   }
-  else if (t < 0.85) {
-    // Phase 2 — 3° glide down the centerline. Linear lerp on the line
-    // from approach gate to threshold; the slope plus speed schedule
-    // produces a proper geometric descent.
-    const tt = easeInOut((t - 0.30) / 0.55);
+
+  const fwdH = leaderForward(); fwdH.y = 0;
+  if (fwdH.lengthSq() > 1e-6) fwdH.normalize();
+
+  if (t < 0.10) {
+    // Stabilize: hold altitude + centerline at approach speed.
     leaderState.pos.x = APPROACH_X;
-    leaderState.pos.y = APPROACH_ALT + (12         - APPROACH_ALT) * tt;
-    leaderState.pos.z = APPROACH_Z   + (TOUCHDOWN_Z - APPROACH_Z)  * tt;
-    if (leaderState.pos.y < groundY + 3) leaderState.pos.y = groundY + 3;
-    alignLeaderTo(climbQuat(-0.05), 2.5, dt);
-    const sp = plan.speed.cruise * 0.7 + (70 - plan.speed.cruise * 0.7) * tt;
-    leaderState.speed = approach(leaderState.speed, sp, 5, dt);
+    leaderState.pos.y += (APPROACH_ALT - leaderState.pos.y) * 1.5 * dt;
+    alignLeaderTo(climbQuat(-0.03), 3, dt);
+    leaderState.speed = approach(leaderState.speed, VREF + 5, 4, dt);
+    leaderState.pos.addScaledVector(fwdH, leaderState.speed * dt);
   }
-  else if (t < 0.94) {
-    // Phase 3 — flare. Pitch up; sink rate decays toward touchdown.
-    const tt = (t - 0.85) / 0.09;
-    const targetPitch = -0.05 + (0.10 - (-0.05)) * easeInOut(tt);
+  else if (t < 0.78) {
+    // 3° final approach. Geometric descent rate is V·sin(3°) — this is
+    // FLIGHT-realistic, not a contrived linear interpolation. At ~70 m/s
+    // that's ~3.7 m/s sink, ~73 m/s ground speed → wingmen track easily.
+    leaderState.speed = approach(leaderState.speed, VREF, 3, dt);
+    alignLeaderTo(climbQuat(-0.05), 2.5, dt);
+    leaderState.pos.addScaledVector(fwdH, leaderState.speed * dt);
+    const sinkRate = leaderState.speed * Math.sin(3 * Math.PI / 180);
+    leaderState.pos.y -= sinkRate * dt;
+    if (leaderState.pos.y < groundY + 5) leaderState.pos.y = groundY + 5;
+    // Soft centerline pull (correct for any drift).
+    leaderState.pos.x += (TOUCHDOWN_X - leaderState.pos.x) * Math.min(1, 1.2 * dt);
+  }
+  else if (t < 0.90) {
+    // Flare: pitch up to +6°, sink rate decays from 3.7 → 0.5 m/s.
+    const tt = (t - 0.78) / 0.12;
+    const k  = easeInOut(tt);
+    const targetPitch = -0.05 + (0.10 - (-0.05)) * k;
     alignLeaderTo(climbQuat(targetPitch), 4, dt);
-    const sinkStart = 70 * Math.sin(3 * Math.PI / 180);
-    const sinkRate  = sinkStart * (1 - easeInOut(tt)) + 0.5 * easeInOut(tt);
+    const sinkStart = leaderState.speed * Math.sin(3 * Math.PI / 180);
+    const sinkRate  = sinkStart * (1 - k) + 0.5 * k;
     leaderState.pos.y = Math.max(groundY, leaderState.pos.y - sinkRate * dt);
     leaderState.pos.x += (TOUCHDOWN_X - leaderState.pos.x) * Math.min(1, 2 * dt);
-    leaderState.speed = approach(leaderState.speed, 55, 4, dt);
-    const fwdH = leaderForward(); fwdH.y = 0;
-    if (fwdH.lengthSq() > 1e-6) fwdH.normalize();
+    leaderState.speed = approach(leaderState.speed, VTOUCH, 4, dt);
     leaderState.pos.addScaledVector(fwdH, leaderState.speed * dt);
   }
   else {
-    // Phase 4 — rollout. Wheels glued, X locked to centerline, brake.
+    // Rollout: wheels on tarmac, X locked, brake to taxi.
     leaderState.pos.y = groundY;
     leaderState.pos.x += (TOUCHDOWN_X - leaderState.pos.x) * Math.min(1, 3 * dt);
     alignLeaderTo(levelQuat(), 4, dt);
-    leaderState.speed = approach(leaderState.speed, 18, 18, dt);
-    // Cap so we don't taxi past the opposite threshold.
-    if (leaderState.pos.z > ROLLOUT_END_Z) {
-      const fwdH = leaderForward(); fwdH.y = 0;
-      if (fwdH.lengthSq() > 1e-6) fwdH.normalize();
-      leaderState.pos.addScaledVector(fwdH, leaderState.speed * dt);
-    }
+    leaderState.speed = approach(leaderState.speed, VTAXI, 14, dt);
+    leaderState.pos.addScaledVector(fwdH, leaderState.speed * dt);
   }
   sim.formationFrom = sim.formationTo = 'TRAIL';
   sim.formationT = 1;
@@ -2852,7 +2856,11 @@ function frame(now) {
   // it the wingman matches the slot's velocity at zero error and only
   // uses the feedback term to close real position deviation.
   const curMod = (sim.curIdx >= 0) ? plan.modules[sim.curIdx] : null;
-  const rigid = curMod && curMod.type === 'TAKEOFF';
+  // Rigid: TAKEOFF rolls out as one element; sim._oneShotRigid is a single-
+  // frame flag set when a module teleports the leader (e.g. landing entry
+  // snaps to the approach gate) so all wingmen rigid-jump too instead of
+  // chasing at 7 G with their bodies pointing the wrong way.
+  const rigid = (curMod && curMod.type === 'TAKEOFF') || sim._oneShotRigid;
   const turnK = 1 - Math.exp(-5 * dt);
   const MAX_SPEED = 180;          // m/s — wingman top end (slightly above leader cruise)
   const MAX_ACCEL = 7 * 9.81;     // 7 G — combat persistent limit
@@ -2905,6 +2913,8 @@ function frame(now) {
     spawnSmoke(p, dt);
     updateSmoke(p, dt);
   }
+  // Clear one-shot rigid flag now that every wingman has snapped this tick.
+  sim._oneShotRigid = false;
 
   // Camera
   updateCamera(dt);
