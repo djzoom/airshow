@@ -447,7 +447,6 @@ kbd,#comms button kbd,.comms-hint kbd{
           <option value="THUNDERBIRDS">Thunderbirds · F-16 (6)</option>
           <option value="FRECCE">Frecce · MB-339 (10)</option>
           <option value="RUSSIAN_KNIGHTS">Russian Knights · Su-27 (6)</option>
-          <option value="WHITE">纯白涂装 · White Livery (6)</option>
         </select></div>
       <div class="field"><label>表演场地 / Venue</label>
         <select id="venuePreset">
@@ -1269,7 +1268,12 @@ function loadAirportFromVenue(venue) {
     RUNWAY_TOP_Y = bestZSpan > 0 ? runwayBox.max.y + 0.5 : 0.5;
     console.log('[airport] runway top y =', RUNWAY_TOP_Y.toFixed(2), 'span', bestZSpan.toFixed(0));
     airportGroup.add(m);
-    // (runway lights removed — flicker/aliasing harmed daylight readability)
+    // Re-seat the formation now that we know the actual slab height. The
+    // first resetSim() ran with RUNWAY_TOP_Y = 0 (still loading), so the
+    // wheels were below the runway visually; replanting once the value is
+    // correct fixes the "plane sticking out of the tarmac" issue at
+    // startup. Skip if the user has already pressed Play.
+    if (!sim.playing && sim.time === 0) resetSim();
     console.log('[airport] loaded', venue.airportModel || 'airport.glb', 'runway', horiz.toUpperCase(), 'len', runway.toFixed(1), '→ scale', scale.toFixed(3));
   }, undefined, err => {
     console.warn('[airport] load failed, using procedural fallback:', err && err.message);
@@ -1423,20 +1427,6 @@ const TEAM_PRESETS = {
     smokeAssign: [0, 1, 2, 0, 1, 2],
     credits: 'Su-27 model derived from Sketchfab CC-BY upload',
   },
-  WHITE: {
-    label: '纯白涂装 · Pure White',
-    short: 'WHITE LIVERY',
-    model: 'su27.glb',
-    modelOrient: { x: 0, y: Math.PI, z: 0 },
-    modelScale: 9,
-    teamSize: 6,
-    initialFormation: 'V',
-    // Uniform glossy white airframes — emphasises silhouette + smoke
-    bodyColors: Array(9).fill(0xffffff),
-    smokeColors: [0xffffff],
-    smokeAssign: [0,0,0,0,0,0,0,0,0],
-    credits: 'Same Su-27 mesh, identity-flat livery for poster shots',
-  },
 };
 
 // ---------- Plane fleet ----------
@@ -1503,16 +1493,38 @@ class Plane {
   setMesh(template, modelScale) {
     // template is a normalized scene: oriented (nose -Z), centered, unscaled.
     // Stored in template.userData.bbMax = pre-orient longest axis length.
-    // We share GLB materials across all clones so each plane wears the
-    // model's original livery — tinting with team colour was a fun idea
-    // but ended up muddy on textured GLBs. The per-team identity now
-    // lives in the smoke ribbon colour instead.
     const m = template.clone(true);
     const targetLen = modelScale || 8;
     const bbMax = template.userData.bbMax || 1;
     m.scale.setScalar(targetLen / bbMax);
-    m.traverse(c => { if (c.isMesh) c.castShadow = true; });
+    // After scale + recentering the airframe sits roughly with its belly
+    // at -modelScale*0.25 in local Y. Anything noticeably lower than that
+    // is almost certainly landing gear / ventral antenna / drop tank —
+    // tag them so the airframe can hide them after lift-off.
+    m.updateMatrixWorld(true);
+    const whole = new THREE.Box3().setFromObject(m);
+    const wholeH = whole.max.y - whole.min.y;
+    const gearThreshold = whole.min.y + wholeH * 0.32;
+    this.gear = [];
+    m.traverse(c => {
+      if (!c.isMesh) return;
+      c.castShadow = true;
+      const b = new THREE.Box3().setFromObject(c);
+      const cy = (b.min.y + b.max.y) / 2;
+      const sz = b.getSize(new THREE.Vector3());
+      const small = Math.max(sz.x, sz.z) < (whole.max.x - whole.min.x) * 0.35;
+      if (cy < gearThreshold && small && sz.y < wholeH * 0.45) {
+        this.gear.push(c);
+      }
+    });
     this.group.add(m);
+  }
+  // Hide / show the gear group based on whether wheels can plausibly be
+  // out. We retract once the plane is more than ~10 m above the runway
+  // slab and extend again as it re-approaches landing height.
+  updateGear() {
+    const onGround = this.position.y < (RUNWAY_TOP_Y || 0) + 12;
+    for (const g of this.gear || []) g.visible = onGround;
   }
   apply() {
     this.group.position.copy(this.position);
@@ -1597,7 +1609,38 @@ const RIBBON_BASE_W = 1.1;        // half-width at the head (~2.2 m)
 const RIBBON_GROW   = 0.045;      // half-width grows ~0.5 m/s of life
 const RIBBON_LIFE   = 5.0;        // seconds before a slot fades to 0
 
-function makeRibbon(plane) {
+// Two ribbons per plane — one off the left wing-root, one off the right.
+// Display teams (Frecce, Red Arrows, Patrouille de France) emit from
+// twin nozzles and the visible plume reads as parallel lines, not one
+// fat strip. We share the same ShaderMaterial across both sides.
+const RIBBON_TRACK = 4.5;     // half-distance between the two emit points (m)
+
+const ribbonShaderMat = new THREE.ShaderMaterial({
+  transparent: true,
+  depthWrite: false,
+  blending: THREE.NormalBlending,
+  side: THREE.DoubleSide,
+  vertexShader: `
+    attribute vec3 color;
+    attribute float aAlpha;
+    varying float vAlpha;
+    varying vec3 vColor;
+    void main() {
+      vAlpha = aAlpha;
+      vColor = color;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }`,
+  fragmentShader: `
+    varying float vAlpha;
+    varying vec3 vColor;
+    void main() {
+      if (vAlpha < 0.02) discard;
+      gl_FragColor = vec4(vColor * 1.15, vAlpha);
+    }`,
+});
+
+function makeRibbonStrand(plane) {
+  // Build one strip + ring buffer; we'll create two of these per plane.
   const n = RIBBON_LEN;
   const positions = new Float32Array(n * 2 * 3);
   const colors    = new Float32Array(n * 2 * 3);
@@ -1613,92 +1656,81 @@ function makeRibbon(plane) {
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.setAttribute('aAlpha', new THREE.BufferAttribute(alphas, 1));
   geo.setIndex(indices);
-  // ShaderMaterial doesn't auto-declare custom attributes for vertex
-  // colors / alphas — they have to be explicit. Plain pass-through here:
-  // colour from per-vertex `color`, opacity from per-vertex `aAlpha`.
-  const mat = new THREE.ShaderMaterial({
-    transparent: true,
-    depthWrite: false,
-    blending: THREE.NormalBlending,
-    side: THREE.DoubleSide,         // strip is unwound into both directions
-    vertexShader: `
-      attribute vec3 color;
-      attribute float aAlpha;
-      varying float vAlpha;
-      varying vec3 vColor;
-      void main() {
-        vAlpha = aAlpha;
-        vColor = color;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }`,
-    fragmentShader: `
-      varying float vAlpha;
-      varying vec3 vColor;
-      void main() {
-        if (vAlpha < 0.02) discard;
-        // Slight gamma boost so the colored vapor stays readable against
-        // the bright daylight sky.
-        gl_FragColor = vec4(vColor * 1.15, vAlpha);
-      }`,
-  });
-  const mesh = new THREE.Mesh(geo, mat);
+  const mesh = new THREE.Mesh(geo, ribbonShaderMat);
   mesh.frustumCulled = false;
   scene.add(mesh);
-  // Ring buffer: entries hold {pos, right, age}. We keep one slot per ring
-  // index to reuse memory across writes.
   const ring = [];
   for (let i=0;i<n;i++) ring.push({ pos:new THREE.Vector3(), right:new THREE.Vector3(), age: 1e9 });
-  plane.ribbon = { mesh, geo, ring, head: 0, fillTimer: 0, color: new THREE.Color(plane.smokeColor) };
+  return { mesh, geo, ring, head: 0 };
+}
+
+function makeRibbon(plane) {
+  plane.ribbon = {
+    left:  makeRibbonStrand(plane),
+    right: makeRibbonStrand(plane),
+    fillTimer: 0,
+    color: new THREE.Color(plane.smokeColor),
+  };
 }
 
 function disposeRibbon(plane) {
   if (!plane.ribbon) return;
-  scene.remove(plane.ribbon.mesh);
-  plane.ribbon.geo.dispose();
-  plane.ribbon.mesh.material.dispose();
+  for (const side of ['left', 'right']) {
+    const s = plane.ribbon[side];
+    scene.remove(s.mesh);
+    s.geo.dispose();
+  }
   delete plane.ribbon;
 }
 
 function spawnSmoke(p, dt) {
   if (!p.ribbon) makeRibbon(p);
   const r = p.ribbon;
-  // Age every entry; oldest (age >= 1e8) means "empty / not drawn".
-  for (const e of r.ring) e.age += dt;
+  // Age every entry on both strands.
+  for (const e of r.left.ring)  e.age += dt;
+  for (const e of r.right.ring) e.age += dt;
   if (!smokeGlobalOn || !p.smokeOn || !sim.playing) return;
   r.fillTimer += dt;
   if (r.fillTimer < RIBBON_DT) return;
   r.fillTimer = 0;
-  // Sample the plane's local right axis so the strip widens across the
-  // span direction, just like real wingtip vapor.
+  // Local axes — strand offset is RIBBON_TRACK along the body's right axis.
   const right = new THREE.Vector3(1,0,0).applyQuaternion(p.quaternion);
-  // Emit from just behind the tailpipe (rear of the airframe, slightly
-  // below centerline) so the ribbon visually starts where exhaust would.
-  const back = new THREE.Vector3(0, -0.4, 4.2).applyQuaternion(p.quaternion);
-  const e = r.ring[r.head];
-  e.pos.copy(p.position).add(back);
-  e.right.copy(right);
-  e.age = 0;
-  r.head = (r.head + 1) % RIBBON_LEN;
+  const back  = new THREE.Vector3(0, -0.4, 4.2).applyQuaternion(p.quaternion);
+  // Centre point: just behind the tailpipe.
+  const cx = p.position.x + back.x;
+  const cy = p.position.y + back.y;
+  const cz = p.position.z + back.z;
+  // Left strand
+  {
+    const e = r.left.ring[r.left.head];
+    e.pos.set(cx - right.x * RIBBON_TRACK,
+              cy - right.y * RIBBON_TRACK,
+              cz - right.z * RIBBON_TRACK);
+    e.right.copy(right);
+    e.age = 0;
+    r.left.head = (r.left.head + 1) % RIBBON_LEN;
+  }
+  // Right strand
+  {
+    const e = r.right.ring[r.right.head];
+    e.pos.set(cx + right.x * RIBBON_TRACK,
+              cy + right.y * RIBBON_TRACK,
+              cz + right.z * RIBBON_TRACK);
+    e.right.copy(right);
+    e.age = 0;
+    r.right.head = (r.right.head + 1) % RIBBON_LEN;
+  }
 }
 
-function updateSmoke(p, dt) {
-  if (!p.ribbon) return;
-  const r = p.ribbon;
-  const pos = r.geo.attributes.position.array;
-  const col = r.geo.attributes.color.array;
-  const alp = r.geo.attributes.aAlpha.array;
-  const c = r.color;
-  // Walk newest-to-oldest by reading from r.head backwards. The vertex
-  // pair index `i` in the geometry corresponds to ring slot
-  // (r.head - 1 - i) mod RIBBON_LEN.
-  // When ribbonPersist is on, each entry survives forever instead of
-  // fading at RIBBON_LIFE. Width still grows slowly with age either way
-  // so old trail diffuses into a soft edge.
+function _updateStrand(s, color) {
+  const pos = s.geo.attributes.position.array;
+  const col = s.geo.attributes.color.array;
+  const alp = s.geo.attributes.aAlpha.array;
   const persist = !!ribbonPersist;
   const lifeMax = RIBBON_LIFE;
   for (let i=0;i<RIBBON_LEN;i++) {
-    const ringIdx = (r.head - 1 - i + RIBBON_LEN) % RIBBON_LEN;
-    const e = r.ring[ringIdx];
+    const ringIdx = (s.head - 1 - i + RIBBON_LEN) % RIBBON_LEN;
+    const e = s.ring[ringIdx];
     const k = i*2*3;
     const dead = !persist && e.age > lifeMax;
     const empty = e.age > 1e6;
@@ -1707,8 +1739,6 @@ function updateSmoke(p, dt) {
       pos[k] = pos[k+1] = pos[k+2] = pos[k+3] = pos[k+4] = pos[k+5] = 0;
       continue;
     }
-    // Width grows slowly. Cap aging-for-width at lifeMax so persist mode
-    // doesn't keep ballooning forever.
     const wAge = Math.min(e.age, lifeMax);
     const w = RIBBON_BASE_W + wAge * RIBBON_GROW;
     pos[k+0] = e.pos.x + e.right.x * w;
@@ -1717,21 +1747,25 @@ function updateSmoke(p, dt) {
     pos[k+3] = e.pos.x - e.right.x * w;
     pos[k+4] = e.pos.y - e.right.y * w;
     pos[k+5] = e.pos.z - e.right.z * w;
-    col[k+0] = c.r; col[k+1] = c.g; col[k+2] = c.b;
-    col[k+3] = c.r; col[k+4] = c.g; col[k+5] = c.b;
+    col[k+0] = color.r; col[k+1] = color.g; col[k+2] = color.b;
+    col[k+3] = color.r; col[k+4] = color.g; col[k+5] = color.b;
     let a;
-    if (persist) {
-      a = 0.85;     // flat opacity — keeps the whole flight history readable
-    } else {
-      // Quadratic fade so the head stays bold and the tail dies smoothly.
+    if (persist) a = 0.85;
+    else {
       const ageK = Math.max(0, 1 - e.age / lifeMax);
       a = ageK * ageK * 0.95;
     }
     alp[i*2] = a; alp[i*2+1] = a;
   }
-  r.geo.attributes.position.needsUpdate = true;
-  r.geo.attributes.color.needsUpdate = true;
-  r.geo.attributes.aAlpha.needsUpdate = true;
+  s.geo.attributes.position.needsUpdate = true;
+  s.geo.attributes.color.needsUpdate = true;
+  s.geo.attributes.aAlpha.needsUpdate = true;
+}
+
+function updateSmoke(p, dt) {
+  if (!p.ribbon) return;
+  _updateStrand(p.ribbon.left,  p.ribbon.color);
+  _updateStrand(p.ribbon.right, p.ribbon.color);
 }
 
 // ---------- Leader "virtual" state ----------
@@ -1852,41 +1886,48 @@ function approach(cur, target, rate, dt) {
   return cur + step;
 }
 
+// Takeoff is now a physics-based curve, not a parametric (mt/dur) lerp.
+// Constants approximate a J-10:
+//   accel       ~ 4.5 m/s²    (A/F ≈ 0.5 thrust-to-weight, light fuel)
+//   v_rotate    ~ 75 m/s      (~145 KIAS, plausible rotate speed)
+//   v_climb     ~ 120 m/s     (climb-out IAS)
+//   roll length ~ 700–900 m   (auto-derived from accel + v_rotate)
 function MOD_TAKEOFF(mod, mt, dur, dt) {
-  // Three phases — never directly write pos.y. Instead the leader's
-  // pitch tilts gradually upward and the forward-vector-driven motion
-  // does the climbing. This way the airframe's nose always points along
-  // the velocity vector (no "ground-clipping ghost rising straight up").
-  const t = mt/dur;
-  let targetPitch = 0;        // rad, positive = nose up (YXZ Euler)
-  let targetSpeed = 95;
-  if (t < 0.45) {
-    // Ground roll — wings level, accelerate
+  const TAKEOFF_ACCEL = 4.5;
+  const V_ROTATE = 75;
+  const V_CLIMB  = 120;
+  const groundY = (RUNWAY_TOP_Y || 0) + 3;
+  let targetPitch = 0;
+
+  if (leaderState.speed < V_ROTATE) {
+    // Ground roll — wings level, constant longitudinal accel.
+    leaderState.speed = Math.min(V_ROTATE * 1.05,
+                                 leaderState.speed + TAKEOFF_ACCEL * dt);
     targetPitch = 0;
-    targetSpeed = 50 + (t/0.45) * 60;     // 50 → 110
-  } else if (t < 0.55) {
-    // Rotation — ease pitch up to 12°, no abrupt yank
-    const p = (t-0.45)/0.10;
-    const eased = p*p*(3 - 2*p);          // smoothstep
-    targetPitch = 0.21 * eased;
-    targetSpeed = approach(leaderState.speed, 110, 30, dt);
+    // Stick wheels to the slab.
+    leaderState.pos.y = groundY;
   } else {
-    // Climb-out — bleed pitch back to ~3° as altitude grows.
-    const p = (t-0.55)/0.45;
-    const climbAngle = (1 - p) * 0.21 + p * 0.05;
-    targetPitch = climbAngle;
-    targetSpeed = approach(leaderState.speed, 120, 25, dt);
-    // Optional cap: stop climbing once we hit cruise altitude.
-    if (leaderState.pos.y >= plan.alt.cruise) targetPitch = 0.0;
+    // Rotation + climb-out, driven by speed margin past V_ROTATE.
+    const margin = (leaderState.speed - V_ROTATE) / (V_CLIMB - V_ROTATE);
+    const m = Math.max(0, Math.min(1, margin));
+    // Rotation eases pitch from 0 to 12° as airspeed crosses rotate.
+    // Beyond V_CLIMB pitch bleeds back toward 4° to maintain climb.
+    const peakPitch = 0.21;          // ~12°
+    const cruisePitch = 0.07;        // ~4°
+    targetPitch = m < 1
+      ? peakPitch * m
+      : peakPitch + (cruisePitch - peakPitch) * Math.min(1, (m - 1));
+    if (leaderState.pos.y >= plan.alt.cruise) targetPitch = 0;
+    // Acceleration drops a bit after rotation (climb drag).
+    leaderState.speed = Math.min(V_CLIMB,
+                                 leaderState.speed + TAKEOFF_ACCEL * 0.7 * dt);
+    // Floor only until the airframe has cleared a few meters.
+    if (leaderState.pos.y < groundY + 0.5) leaderState.pos.y = groundY + 0.5;
   }
-  // Smooth pitch lerp (rate=2.0 → ~0.5s time-constant) so the rotation
-  // looks like a controlled flare, not a snap.
-  alignLeaderTo(climbQuat(targetPitch), 2.0, dt);
-  leaderState.speed = targetSpeed;
+  // Slow pitch lerp keeps rotation reading as a controlled flare.
+  alignLeaderTo(climbQuat(targetPitch), 1.4, dt);
   // Pure forward motion — y rises naturally from the pitched velocity.
   leaderState.pos.addScaledVector(leaderForward(), leaderState.speed * dt);
-  // Floor the wheels at runway height during the ground roll.
-  if (t < 0.5) leaderState.pos.y = Math.max(leaderState.pos.y, (RUNWAY_TOP_Y||0) + 3);
   sim.formationFrom = sim.formationTo = plan.team.initialFormation;
   sim.formationT = 1;
 }
@@ -2325,6 +2366,7 @@ function frame(now) {
     p.position.lerp(p.targetPos, followK);
     p.quaternion.slerp(p.targetQuat, turnK);
     p.apply();
+    p.updateGear();
     spawnSmoke(p, dt);
     updateSmoke(p, dt);
   }
@@ -2469,12 +2511,37 @@ function pickShowSub(now) {
 }
 
 // --- Individual camera operators ---
+// Photographer's smoothed look-at — exponential moving average of the
+// leader position. Long focal lengths magnify any per-frame jitter, so
+// the lookAt has to ride a heavy low-pass filter (τ ~= 1.4 s) before the
+// camera lookAt picks it up. Re-using one EMA across the photog cam
+// avoids re-allocating each frame.
+const photogLookEMA = new THREE.Vector3();
+let photogLookInit = false;
 function camPhotog(now, want, look) {
-  // Photographer on the crowd line (-X side). Position locked; only the
-  // lens zooms and the camera pans/tilts toward the formation centroid.
+  // Position locked at the crowd-line vantage point.
   want.set(-280, 8, 60);
-  if (planes.length) look.copy(planes[0].position);
-  applyHandheld(want, now * 0.001, 0.2);
+  if (!planes.length) { look.set(0, 100, 0); return; }
+  const lp = planes[0].position;
+  // EMA decay rate dependent on distance. Far targets shake more on the
+  // sensor, so we damp them harder. Near targets (low-pass with τ ≈ 0.6 s)
+  // still feel responsive.
+  const dist = lp.distanceTo(want);
+  const tau = THREE.MathUtils.clamp(0.6 + dist / 1500, 0.6, 2.4);
+  if (!photogLookInit) { photogLookEMA.copy(lp); photogLookInit = true; }
+  const k = 1 - Math.exp(-(1 / 60) / tau);  // assume ~60 Hz; cosmetic only
+  photogLookEMA.lerp(lp, k);
+  // Beyond ~1.5 km we shift target to the formation centroid so the
+  // photographer keeps a steady wide compositional anchor instead of
+  // chasing one distant aircraft.
+  if (dist > 1500 && planes.length > 1) {
+    const cx = new THREE.Vector3();
+    for (const p of planes) cx.add(p.position);
+    cx.divideScalar(planes.length);
+    look.copy(cx);
+  } else {
+    look.copy(photogLookEMA);
+  }
 }
 
 function camHeli(now, want, look) {
@@ -2548,7 +2615,10 @@ function updateCamera(dt) {
   // lens doesn't drift; SHOW inherits its sub-cam's tau.
   const tauPos = role === 'photog' ? 0.5 : role === 'heli' ? 0.6 : 0.35;
   camera.position.lerp(want, 1 - Math.exp(-dt / tauPos));
-  camLookAt.lerp(look, 1 - Math.exp(-dt / (role === 'photog' ? 0.45 : 0.25)));
+  // PHOTOG already does a heavy EMA on its target; this outer lerp adds
+  // another 1.5 s constant for absolute solidity at long focal length.
+  const lookTau = role === 'photog' ? 1.5 : 0.25;
+  camLookAt.lerp(look, 1 - Math.exp(-dt / lookTau));
   camera.lookAt(camLookAt);
 }
 
@@ -2819,7 +2889,10 @@ document.getElementById('smokeToggle').addEventListener('click', e => {
   // When turning off, sweep ribbons so the toggle feels immediate.
   if (!smokeGlobalOn) {
     for (const p of planes) {
-      if (p.ribbon) for (const e of p.ribbon.ring) e.age = 999;
+      if (p.ribbon) {
+        for (const e of p.ribbon.left.ring)  e.age = 999;
+        for (const e of p.ribbon.right.ring) e.age = 999;
+      }
     }
   }
 });
@@ -2934,7 +3007,10 @@ function teleportToShowAlt() {
     p.targetPos.copy(p.position);
     p.targetQuat.copy(p.quaternion);
     // Sweep any old ribbon points so the trail starts fresh in the air.
-    if (p.ribbon) for (const e of p.ribbon.ring) e.age = 999;
+    if (p.ribbon) {
+      for (const e of p.ribbon.left.ring)  e.age = 999;
+      for (const e of p.ribbon.right.ring) e.age = 999;
+    }
   }
 }
 
