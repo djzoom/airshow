@@ -1551,6 +1551,11 @@ function loadModelOnce(path, orient) {
       const box2 = new THREE.Box3().setFromObject(wrap);
       const sz2 = box2.getSize(new THREE.Vector3());
       wrap.userData.bbMax = Math.max(sz2.x, sz2.y, sz2.z) || 1;
+      // Tag candidate gear nodes by position+size heuristic. Conservative
+      // thresholds (lowest 6% of model height, max-extent ≤ 10% of height)
+      // so we don't catch body parts. If no candidates fit, the gear
+      // animation silently no-ops and the GLB renders as before.
+      tagGearCandidates(wrap, box2);
       modelCache[path] = wrap;
       resolve(wrap);
     }, undefined, err => {
@@ -1561,6 +1566,33 @@ function loadModelOnce(path, orient) {
   });
   modelCache[path] = p;
   return p;
+}
+
+// Heuristic: walk the airframe and tag meshes that are
+//   (a) wholly inside the lowest 8% of the airframe's Y range, and
+//   (b) small in every axis (≤ 12% of airframe height).
+// These are almost always landing-gear assemblies. Body parts fail (b)
+// because fuselages and wings span more than 12% of the height range.
+// Hits get c.userData.isGear = true, which Plane.setMesh re-collects
+// after clone(true) preserves userData.
+function tagGearCandidates(root, overall) {
+  const range = overall.max.y - overall.min.y;
+  if (range <= 0) return;
+  const lowThresh = overall.min.y + range * 0.08;
+  const sizeCap   = range * 0.12;
+  const tmpBox = new THREE.Box3();
+  const tmpSz  = new THREE.Vector3();
+  let count = 0;
+  root.traverse(c => {
+    if (!c.isMesh) return;
+    tmpBox.setFromObject(c);
+    tmpBox.getSize(tmpSz);
+    if (tmpBox.min.y > lowThresh) return;
+    if (tmpSz.x > sizeCap || tmpSz.y > sizeCap || tmpSz.z > sizeCap) return;
+    c.userData.isGear = true;
+    count++;
+  });
+  root.userData.gearCount = count;
 }
 
 class Plane {
@@ -1584,6 +1616,13 @@ class Plane {
     this.scriptOverride = null; // function(plane, mt, mod_t) for special modules
     this.group = new THREE.Group();
     scene.add(this.group);
+    // Gear animation state. gearK animates between 0 (retracted) and 1
+    // (fully extended). gearTarget is set every frame by updateGear()
+    // based on AGL — gear comes down within 8 m of the runway slab,
+    // retracts once climbing past that.
+    this.gear = [];
+    this.gearK = 1.0;
+    this.gearTarget = 1.0;
   }
   setMesh(template, modelScale) {
     // template is a normalized scene: oriented (nose -Z), centered, unscaled.
@@ -1592,19 +1631,29 @@ class Plane {
     const targetLen = modelScale || 8;
     const bbMax = template.userData.bbMax || 1;
     m.scale.setScalar(targetLen / bbMax);
-    // Gear-hide heuristic disabled: it cut legitimate Su-27 body parts
-    // and didn't actually catch MB-339's gear. Restoring it requires
-    // hand-tagged "gear" nodes inside the GLBs (Blender export).
     m.traverse(c => { if (c.isMesh) c.castShadow = true; });
+    // Re-collect gear meshes after clone — userData survives clone(true),
+    // so any node tagged in tagGearCandidates() is still tagged on the copy.
     this.gear = [];
+    m.traverse(c => { if (c.isMesh && c.userData.isGear) this.gear.push(c); });
     this.group.add(m);
   }
-  // Hide / show the gear group based on whether wheels can plausibly be
-  // out. We retract once the plane is more than ~10 m above the runway
-  // slab and extend again as it re-approaches landing height.
-  updateGear() {
-    const onGround = this.position.y < (RUNWAY_TOP_Y || 0) + 12;
-    for (const g of this.gear || []) g.visible = onGround;
+  // Animate the landing gear toward its target state. Asymmetric tau:
+  // retraction is brisk (~0.6 s, hydraulic snap up), extension is slower
+  // (~1.4 s, wheels-down sequence with pump) so the motion reads as
+  // mechanical rather than instant. We squash the strut+wheel meshes
+  // uniformly — at distance the visual reads as the gear tucking away
+  // even though the mesh isn't actually translating into a bay.
+  updateGear(dt) {
+    const agl = this.position.y - (RUNWAY_TOP_Y || 0);
+    this.gearTarget = agl < 8 ? 1.0 : 0.0;
+    if (!this.gear.length) return;
+    const tauUp   = 0.6;       // retracting (target lower than current)
+    const tauDown = 1.4;       // extending
+    const tau = (this.gearTarget < this.gearK) ? tauUp : tauDown;
+    this.gearK += (this.gearTarget - this.gearK) * (1 - Math.exp(-dt / tau));
+    const s = Math.max(0.02, this.gearK);
+    for (const g of this.gear) g.scale.setScalar(s);
   }
   apply() {
     this.group.position.copy(this.position);
@@ -1940,6 +1989,9 @@ const leaderState = {
   pos: new THREE.Vector3(0, 5, 700),
   quat: new THREE.Quaternion(),
   speed: 0,
+  // Module-time at which rotation began. -1 = haven't rotated yet.
+  // Set by MOD_TAKEOFF on the first frame past V_R, reset by resetSim.
+  _rotateT: -1,
 };
 
 function leaderForward() {
@@ -1992,6 +2044,7 @@ function resetSim() {
   leaderState.pos.set(0, groundY, 700);
   leaderState.quat.identity();   // forward = -Z
   leaderState.speed = 0;
+  leaderState._rotateT = -1;
 
   buildFleet(plan.team.size, TEAM_PRESETS[plan.preset]);
   for (let i=0;i<planes.length;i++) {
@@ -2035,40 +2088,49 @@ function approach(cur, target, rate, dt) {
 //   v_climb     ~ 120 m/s     (climb-out IAS)
 //   roll length ~ 700–900 m   (auto-derived from accel + v_rotate)
 function MOD_TAKEOFF(mod, mt, dur, dt) {
-  const TAKEOFF_ACCEL = 4.5;
+  const TAKEOFF_ACCEL = 5.5;       // ~0.56 G initial — afterburner feel
   const V_ROTATE = 75;
   const V_CLIMB  = 120;
   const groundY = (RUNWAY_TOP_Y || 0) + 3;
+
+  // Drag-aware acceleration: full at low speed, ~30% lower near V_CLIMB.
+  // a = a0 (1 − 0.35 · (v/V_CLIMB)²). Captures the real feel of jet
+  // thrust dropping with airspeed without simulating a full thrust curve.
+  const speedFrac = Math.min(1, leaderState.speed / V_CLIMB);
+  const accel = TAKEOFF_ACCEL * (1.0 - 0.35 * speedFrac * speedFrac);
+
   let targetPitch = 0;
+  let targetRoll  = 0;
 
   if (leaderState.speed < V_ROTATE) {
-    // Ground roll — wings level, constant longitudinal accel.
-    leaderState.speed = Math.min(V_ROTATE * 1.05,
-                                 leaderState.speed + TAKEOFF_ACCEL * dt);
-    targetPitch = 0;
-    // Stick wheels to the slab.
+    // Ground roll. Wings level, faint wing-rock from ground turbulence
+    // (±0.3°, invisible at distance, just enough to break the frozen-CG
+    // look on close cameras). Wheels glued to the slab.
+    leaderState.speed = Math.min(V_ROTATE * 1.05, leaderState.speed + accel * dt);
     leaderState.pos.y = groundY;
+    targetPitch = 0;
+    targetRoll = Math.sin(mt * 4.2) * 0.005;
   } else {
-    // Rotation + climb-out, driven by speed margin past V_ROTATE.
-    const margin = (leaderState.speed - V_ROTATE) / (V_CLIMB - V_ROTATE);
-    const m = Math.max(0, Math.min(1, margin));
-    // Rotation eases pitch from 0 to 12° as airspeed crosses rotate.
-    // Beyond V_CLIMB pitch bleeds back toward 4° to maintain climb.
-    const peakPitch = 0.21;          // ~12°
-    const cruisePitch = 0.07;        // ~4°
-    targetPitch = m < 1
-      ? peakPitch * m
-      : peakPitch + (cruisePitch - peakPitch) * Math.min(1, (m - 1));
+    // Time-based rotation easing. Once airborne we ramp pitch over 1.8 s,
+    // hold, then settle to a steady display-team climb-out (~9°) over the
+    // next 4 s. This avoids the abrupt nose-up that came from threshold-
+    // gating pitch on speed-margin alone.
+    if (leaderState._rotateT < 0) leaderState._rotateT = mt;
+    const rotT = mt - leaderState._rotateT;
+    const peakPitch   = 0.26;  // ~15° — initial rotation
+    const cruisePitch = 0.16;  // ~9°  — steady climb-out
+    const k1 = Math.min(1, rotT / 1.8);
+    const k2 = Math.max(0, Math.min(1, (rotT - 1.8) / 4.0));
+    const easeIn = 1 - (1 - k1) * (1 - k1);          // ease-out (0..1)
+    targetPitch = (peakPitch * (1 - k2) + cruisePitch * k2) * easeIn;
     if (leaderState.pos.y >= plan.alt.cruise) targetPitch = 0;
-    // Acceleration drops a bit after rotation (climb drag).
-    leaderState.speed = Math.min(V_CLIMB,
-                                 leaderState.speed + TAKEOFF_ACCEL * 0.7 * dt);
-    // Floor only until the airframe has cleared a few meters.
+    // Climb costs a bit of accel (gravity component along velocity).
+    leaderState.speed = Math.min(V_CLIMB, leaderState.speed + accel * 0.7 * dt);
     if (leaderState.pos.y < groundY + 0.5) leaderState.pos.y = groundY + 0.5;
   }
-  // Slow pitch lerp keeps rotation reading as a controlled flare.
-  alignLeaderTo(climbQuat(targetPitch), 1.4, dt);
-  // Pure forward motion — y rises naturally from the pitched velocity.
+  // Pitch follow rate slightly snappier than before so the rotation reads
+  // crisply but still feels like a controlled flare, not a snap.
+  alignLeaderTo(climbQuat(targetPitch, targetRoll), 1.7, dt);
   leaderState.pos.addScaledVector(leaderForward(), leaderState.speed * dt);
   sim.formationFrom = sim.formationTo = plan.team.initialFormation;
   sim.formationT = 1;
@@ -2102,9 +2164,17 @@ function MOD_FORMATION_CHANGE(mod, mt, dur, dt) {
   MOD_CRUISE(mod, mt, dur, dt);
 }
 
+// Sine envelope for body-rate maneuvers: rate(t) = (π² / dur) · sin(π·t/dur).
+// Integral over [0,dur] = 2π, so the maneuver still completes one full
+// revolution. Rate is 0 at entry and exit, peak in the middle. Eliminates
+// the rate-snap that made LOOP / BARREL feel like a yank.
+function bodyRateEnvelope(mt, dur) {
+  return (Math.PI * Math.PI / dur) * Math.sin(Math.PI * mt / dur);
+}
+
 function MOD_LOOP(mod, mt, dur, dt) {
   // Body-frame pitch-up for a clean vertical loop (no gimbal-lock from Euler accumulation).
-  const pitchRate = 2*Math.PI / dur;
+  const pitchRate = bodyRateEnvelope(mt, dur);
   rotateLeaderBody(pitchRate, 0, 0, dt);
   // Speed: slowest at apex, fastest at bottom — mt/dur=0 starts level, apex at 0.5, bottom at 1.
   const t = mt/dur;
@@ -2114,8 +2184,9 @@ function MOD_LOOP(mod, mt, dur, dt) {
 }
 
 function MOD_BARREL_ROLL(mod, mt, dur, dt) {
-  // Body-frame roll around forward axis.
-  const rollRate = 2*Math.PI / dur;
+  // Body-frame roll with the same sine ease so the wings don't snap into
+  // motion at the start of the roll.
+  const rollRate = bodyRateEnvelope(mt, dur);
   rotateLeaderBody(0, 0, rollRate, dt);
   moveLeaderForward(dt, plan.speed.cruise + 10);
 }
@@ -2542,7 +2613,7 @@ function frame(now) {
       if (dist < 0.5) p.velocity.multiplyScalar(0.6);
     }
     p.apply();
-    p.updateGear();
+    p.updateGear(dt);
     spawnSmoke(p, dt);
     updateSmoke(p, dt);
   }
