@@ -570,8 +570,9 @@ body.drawer-open #drawer-scrim{opacity:1;pointer-events:auto}
       <button data-cam="photog" title="航展摄影师 · 地面长焦">📷 PHOTOG</button>
       <button data-cam="heli" title="跟拍直升机 · 圆轨道">🚁 HELI</button>
       <button data-cam="wing" title="僚机视角">✈️ WING</button>
+      <button data-cam="tail"   title="尾追 · 紧贴长机 6 点钟">🛩 TAIL</button>
       <button data-cam="follow" title="跟随长机 · 鼠标控角度">🎯 FOLLOW</button>
-      <button data-cam="free" title="鼠标拖拽自由视角">🎮 FREE</button>
+      <button data-cam="free"   title="鼠标拖拽自由视角">🎮 FREE</button>
     </div>
     <div id="camFade"></div>
     <div id="legend">
@@ -1548,6 +1549,12 @@ class Plane {
     this.quaternion = new THREE.Quaternion();
     this.targetPos = new THREE.Vector3();
     this.targetQuat = new THREE.Quaternion();
+    // Physical state — velocity in world coords. The frame loop uses
+    // a PD controller against targetPos with hard caps on velocity and
+    // acceleration so wingmen can never fly faster than ~120 m/s or
+    // pull more than ~7G. Eliminates the lerp-snap "teleport-catchup"
+    // behaviour that broke immersion during formation changes.
+    this.velocity = new THREE.Vector3();
     this.smokeOn = true;
     this.smoke = []; // pooled smoke meshes
     this.smokeTimer = 0;
@@ -2412,24 +2419,58 @@ function frame(now) {
     advanceSim(dt);
   }
 
-  // Smooth pursuit: lerp planes toward target — except during TAKEOFF,
-  // where the formation rolls down the runway as a rigid element so the
-  // wingmen exactly match the leader's physical acceleration. (lerp lag
-  // there made the rear wingmen look like they teleport-accelerated to
-  // catch up, which is what real display teams never do — they all roll
-  // together in formation, see Red Arrows / Diamond / element takeoffs.)
+  // Pursuit: PD controller with velocity + acceleration caps so wingmen
+  // can never appear to teleport. Exception: TAKEOFF locks the formation
+  // rigidly to the leader (display teams roll out as one element).
   const curMod = (sim.curIdx >= 0) ? plan.modules[sim.curIdx] : null;
   const rigid = curMod && curMod.type === 'TAKEOFF';
-  const followK = 1 - Math.exp(-6 * dt);
-  const turnK   = 1 - Math.exp(-5 * dt);
+  const turnK = 1 - Math.exp(-5 * dt);
+  const MAX_SPEED = 160;          // m/s ≈ Mach 0.5 — generous wingman cap
+  const MAX_ACCEL = 7 * 9.81;     // 7 G — combat persistent limit
+  const _toTarget = new THREE.Vector3();
+  const _desiredV = new THREE.Vector3();
+  const _accel    = new THREE.Vector3();
   for (let pi = 0; pi < planes.length; pi++) {
     const p = planes[pi];
     if (rigid && pi > 0) {
+      // Element-takeoff: snap so wingmen mirror leader's physics exactly.
       p.position.copy(p.targetPos);
       p.quaternion.copy(p.targetQuat);
+      // Reset velocity so the moment we leave TAKEOFF the controller
+      // doesn't think the wingman was "moving" by leader-displacement.
+      p.velocity.set(0, 0, 0);
+    } else if (pi === 0) {
+      // Leader is driven directly by leaderState (already physical).
+      p.position.copy(p.targetPos);
+      p.quaternion.copy(p.targetQuat);
+      p.velocity.set(0, 0, 0);
     } else {
-      p.position.lerp(p.targetPos, followK);
+      // Follower PD: aim a desired velocity at the target slot, clip to
+      // MAX_SPEED, then clip the implied acceleration to MAX_ACCEL.
+      _toTarget.subVectors(p.targetPos, p.position);
+      const dist = _toTarget.length();
+      // Critically-damped pursuit: v* = ω · err. Pick ω so a 50 m gap
+      // closes in ~0.6 s without overshoot — fast enough to reform but
+      // not so aggressive that it asks for >7G.
+      const omega = 2.0;
+      _desiredV.copy(_toTarget).multiplyScalar(omega);
+      if (_desiredV.lengthSq() > MAX_SPEED * MAX_SPEED) {
+        _desiredV.setLength(MAX_SPEED);
+      }
+      // Acceleration needed this frame to reach desiredV.
+      _accel.subVectors(_desiredV, p.velocity).divideScalar(Math.max(dt, 1/240));
+      const aMag = _accel.length();
+      if (aMag > MAX_ACCEL) _accel.multiplyScalar(MAX_ACCEL / aMag);
+      // Integrate.
+      p.velocity.addScaledVector(_accel, dt);
+      p.position.addScaledVector(p.velocity, dt);
+      // Quaternion still uses slerp — orientation isn't constrained the
+      // same way. The wingmen visually point along velocity via
+      // formation-pursuit anyway.
       p.quaternion.slerp(p.targetQuat, turnK);
+      // If we're already very close, snap velocity to leader's in-frame
+      // displacement so the wingman doesn't drift on stationary formations.
+      if (dist < 0.5) p.velocity.multiplyScalar(0.6);
     }
     p.apply();
     p.updateGear();
@@ -2632,8 +2673,35 @@ function camWing(now, want, look) {
   applyHandheld(want, now * 0.001, 0.15);
 }
 
+// Cached body-up tracker for TAIL so the camera doesn't roll wildly with
+// the leader during loops. EMA on the leader's local up axis.
+const _tailUp = new THREE.Vector3(0, 1, 0);
+let _tailInit = false;
+
 function updateCamera(dt) {
   const c = sim.cam;
+  if (c === 'tail' && planes.length) {
+    // Locked 6-o'clock chase: 18 m behind, 4 m above the leader, lookAt
+    // a point ahead of the cockpit. No orbit controls. Heavy lookTarget
+    // smoothing so loops/rolls don't yank the framing.
+    const lp = planes[0].position;
+    const lq = planes[0].quaternion;
+    const back = new THREE.Vector3(0, 4, 18).applyQuaternion(lq);
+    const want = new THREE.Vector3().copy(lp).add(back);
+    const ahead = new THREE.Vector3(0, 1.2, -25).applyQuaternion(lq);
+    const look = new THREE.Vector3().copy(lp).add(ahead);
+    // Soft camera follow — feels like a chase plane with mass, not a snap.
+    camera.position.lerp(want, 1 - Math.exp(-dt / 0.18));
+    // Up vector blends between world up and body up so the horizon
+    // doesn't barrel-roll with the leader. 70% world, 30% body.
+    const bodyUp = new THREE.Vector3(0,1,0).applyQuaternion(lq);
+    if (!_tailInit) { _tailUp.copy(bodyUp); _tailInit = true; }
+    _tailUp.lerp(bodyUp, 1 - Math.exp(-dt / 0.4));
+    camera.up.copy(new THREE.Vector3(0,1,0)).lerp(_tailUp, 0.3).normalize();
+    camLookAt.lerp(look, 1 - Math.exp(-dt / 0.4));
+    camera.lookAt(camLookAt);
+    return;
+  }
   if (c === 'free') {
     const cx = new THREE.Vector3();
     for (const p of planes) cx.add(p.position);
