@@ -433,8 +433,8 @@ kbd,#comms button kbd,.comms-hint kbd{
         <button id="pause" title="暂停">⏸</button>
         <button id="restart" title="重置">⟲</button>
         <span class="speedwrap">×<span id="spdLabel">1.0</span><input id="simSpeed" type="range" min="0.25" max="4" step="0.25" value="1"></span>
-        <button id="smokeToggle" class="toggle on" title="切换全队烟雾">SMOKE</button>
-        <button id="trailPersist" class="toggle" title="航迹全程保留 / fade">TRAIL ∞</button>
+        <button id="smokeToggle" class="toggle on" title="航迹烟雾开关">TRAIL</button>
+        <button id="trailPersist" class="toggle" title="航迹全程保留 / fade">∞</button>
         <span class="time" id="time">00:00 / 00:00</span>
       </div>
     </section>
@@ -470,6 +470,20 @@ kbd,#comms button kbd,.comms-hint kbd{
         <div class="row"><input id="spdMin" type="number" value="80"><span class="unit">~</span><input id="spdMax" type="number" value="140"></div></div>
       <div class="field"><label>起飞时间 / T0 (s)</label>
         <input id="takeoffTime" type="number" value="0"></div>
+
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--rule)">
+        <div class="hint" style="margin-bottom:6px">航迹 / TRAIL</div>
+        <div class="field"><label>宽度 / Width (m)</label>
+          <input id="trWidth" type="range" min="0.4" max="4.0" step="0.1" value="1.1"></div>
+        <div class="field"><label>寿命 / Life (s)</label>
+          <input id="trLife" type="range" min="2" max="15" step="0.5" value="5.0"></div>
+        <div class="field"><label>双线间距 / Track (m)</label>
+          <input id="trTrack" type="range" min="0" max="8" step="0.5" value="4.5"></div>
+        <div class="field"><label>不透明度 / Opacity</label>
+          <input id="trOpacity" type="range" min="0.3" max="1.0" step="0.05" value="0.95"></div>
+        <div class="field"><label>扩散 / Grow</label>
+          <input id="trGrow" type="range" min="0" max="0.2" step="0.005" value="0.045"></div>
+      </div>
     </details>
 
     <details open>
@@ -1597,26 +1611,35 @@ for (const ps of Object.values(TEAM_PRESETS)) loadModelOnce(ps.model, ps.modelOr
 // pods or a centerline pylon, which reads as a soft flat plume to the
 // camera, not a stack of puffs. Strip geometry captures that with one
 // draw call per plane.
-let smokeGlobalOn = true;
-// Ribbon persist mode: when true, the trail never fades or recycles — the
-// whole flight history paints the sky like skywriting. Toggled from the
-// SMOKE button area (long-press / dedicated toggle below).
-let ribbonPersist = false;
-// Ribbon trail tuning. Real display teams emit colored vapor from a
-// single fuselage-mounted nozzle at ~10–30 ft/s; the visible plume is
-// 0.5–2 m wide at the tail and diffuses over a few hundred meters.
-// We mimic that here: narrow at the head, growing slowly with age.
-const RIBBON_LEN    = 220;        // ring entries (~9 s history at 25Hz)
-const RIBBON_DT     = 0.04;       // seconds between samples (25 Hz emit)
-const RIBBON_BASE_W = 1.1;        // half-width at the head (~2.2 m)
-const RIBBON_GROW   = 0.045;      // half-width grows ~0.5 m/s of life
-const RIBBON_LIFE   = 5.0;        // seconds before a slot fades to 0
+// (TRAIL_PARAMS.enabled / TRAIL_PARAMS.persist are now TRAIL_PARAMS.enabled / .persist)
+// ---------- TRAIL_PARAMS ----------
+// All smoke / trail tuning lives in this single object so it can be
+// driven from the UI sliders below. The "smoke" and "trail" used to be
+// described as two separate things but are actually one ribbon system,
+// so we now use the umbrella term TRAIL everywhere.
+const TRAIL_PARAMS = {
+  enabled:  true,    // global on / off (was TRAIL_PARAMS.enabled)
+  persist:  false,   // skywriting mode (was TRAIL_PARAMS.persist)
+  width:    1.1,     // half-width at the head, metres
+  grow:     0.045,   // half-width gain per second of age
+  life:     5.0,     // seconds before a slot fades to 0 (ignored if persist)
+  track:    4.5,     // half-distance between the twin strands, metres
+  opacity:  0.95,    // peak alpha at the head
+  // Fixed at build time — change requires recreating ribbon meshes
+  ringLen:  220,
+  emitDt:   0.04,
+};
+
+// Backwards-compatible aliases (lots of call sites read these constants
+// directly; pointing them at TRAIL_PARAMS keeps the diff small).
+const RIBBON_LEN    = TRAIL_PARAMS.ringLen;
+const RIBBON_DT     = TRAIL_PARAMS.emitDt;
 
 // Two ribbons per plane — one off the left wing-root, one off the right.
 // Display teams (Frecce, Red Arrows, Patrouille de France) emit from
 // twin nozzles and the visible plume reads as parallel lines, not one
 // fat strip. We share the same ShaderMaterial across both sides.
-const RIBBON_TRACK = 4.5;     // half-distance between the two emit points (m)
+// (TRAIL_PARAMS.track lives in the TRAIL_PARAMS object)
 
 const ribbonShaderMat = new THREE.ShaderMaterial({
   transparent: true,
@@ -1692,11 +1715,11 @@ function spawnSmoke(p, dt) {
   // Age every entry on both strands.
   for (const e of r.left.ring)  e.age += dt;
   for (const e of r.right.ring) e.age += dt;
-  if (!smokeGlobalOn || !p.smokeOn || !sim.playing) return;
+  if (!TRAIL_PARAMS.enabled || !p.smokeOn || !sim.playing) return;
   r.fillTimer += dt;
   if (r.fillTimer < RIBBON_DT) return;
   r.fillTimer = 0;
-  // Local axes — strand offset is RIBBON_TRACK along the body's right axis.
+  // Local axes — strand offset is TRAIL_PARAMS.track along the body's right axis.
   const right = new THREE.Vector3(1,0,0).applyQuaternion(p.quaternion);
   const back  = new THREE.Vector3(0, -0.4, 4.2).applyQuaternion(p.quaternion);
   // Centre point: just behind the tailpipe.
@@ -1706,9 +1729,9 @@ function spawnSmoke(p, dt) {
   // Left strand
   {
     const e = r.left.ring[r.left.head];
-    e.pos.set(cx - right.x * RIBBON_TRACK,
-              cy - right.y * RIBBON_TRACK,
-              cz - right.z * RIBBON_TRACK);
+    e.pos.set(cx - right.x * TRAIL_PARAMS.track,
+              cy - right.y * TRAIL_PARAMS.track,
+              cz - right.z * TRAIL_PARAMS.track);
     e.right.copy(right);
     e.age = 0;
     r.left.head = (r.left.head + 1) % RIBBON_LEN;
@@ -1716,9 +1739,9 @@ function spawnSmoke(p, dt) {
   // Right strand
   {
     const e = r.right.ring[r.right.head];
-    e.pos.set(cx + right.x * RIBBON_TRACK,
-              cy + right.y * RIBBON_TRACK,
-              cz + right.z * RIBBON_TRACK);
+    e.pos.set(cx + right.x * TRAIL_PARAMS.track,
+              cy + right.y * TRAIL_PARAMS.track,
+              cz + right.z * TRAIL_PARAMS.track);
     e.right.copy(right);
     e.age = 0;
     r.right.head = (r.right.head + 1) % RIBBON_LEN;
@@ -1729,8 +1752,8 @@ function _updateStrand(s, color) {
   const pos = s.geo.attributes.position.array;
   const col = s.geo.attributes.color.array;
   const alp = s.geo.attributes.aAlpha.array;
-  const persist = !!ribbonPersist;
-  const lifeMax = RIBBON_LIFE;
+  const persist = !!TRAIL_PARAMS.persist;
+  const lifeMax = TRAIL_PARAMS.life;
   for (let i=0;i<RIBBON_LEN;i++) {
     const ringIdx = (s.head - 1 - i + RIBBON_LEN) % RIBBON_LEN;
     const e = s.ring[ringIdx];
@@ -1743,7 +1766,7 @@ function _updateStrand(s, color) {
       continue;
     }
     const wAge = Math.min(e.age, lifeMax);
-    const w = RIBBON_BASE_W + wAge * RIBBON_GROW;
+    const w = TRAIL_PARAMS.width + wAge * TRAIL_PARAMS.grow;
     pos[k+0] = e.pos.x + e.right.x * w;
     pos[k+1] = e.pos.y + e.right.y * w;
     pos[k+2] = e.pos.z + e.right.z * w;
@@ -1753,10 +1776,10 @@ function _updateStrand(s, color) {
     col[k+0] = color.r; col[k+1] = color.g; col[k+2] = color.b;
     col[k+3] = color.r; col[k+4] = color.g; col[k+5] = color.b;
     let a;
-    if (persist) a = 0.85;
+    if (persist) a = TRAIL_PARAMS.opacity * 0.9;
     else {
       const ageK = Math.max(0, 1 - e.age / lifeMax);
-      a = ageK * ageK * 0.95;
+      a = ageK * ageK * TRAIL_PARAMS.opacity;
     }
     alp[i*2] = a; alp[i*2+1] = a;
   }
@@ -2485,7 +2508,7 @@ function triggerCut() {
 }
 
 // SHOW director state — current sub-cam + when to cut next + last module.
-const showDirector = { sub: 'photog', nextCutAt: 0, lastMod: -1 };
+const showDirector = { sub: 'photog', nextCutAt: 0, lastMod: -1, lastSwitchAt: 0 };
 const SHOW_PICKS_BY_MODULE = {
   TAKEOFF:        ['photog'],
   CLIMB:          ['photog','heli'],
@@ -2519,6 +2542,7 @@ function pickShowSub(now) {
     do { next = candidates[(Math.random()*candidates.length)|0]; }
     while (candidates.length > 1 && next === showDirector.sub);
     showDirector.sub = next;
+    showDirector.lastSwitchAt = now;
     showDirector.nextCutAt = now + 9 + Math.random() * 7;  // 9–16s holds
     // No flash on auto-cuts: the position lerp itself reads as a smooth
     // hand-off, and constant flashes were causing strobe-like fatigue.
@@ -2627,13 +2651,24 @@ function updateCamera(dt) {
   camera.updateProjectionMatrix();
 
   camera.up.set(0, 1, 0);
-  // PHOTOG and WING want a tighter follow than HELI (orbit) so the long
-  // lens doesn't drift; SHOW inherits its sub-cam's tau.
-  const tauPos = role === 'photog' ? 0.5 : role === 'heli' ? 0.6 : 0.35;
-  camera.position.lerp(want, 1 - Math.exp(-dt / tauPos));
-  // PHOTOG already does a heavy EMA on its target; this outer lerp adds
-  // another 1.5 s constant for absolute solidity at long focal length.
-  const lookTau = role === 'photog' ? 1.5 : 0.25;
+  // Per-role base time-constants. PHOTOG and WING want tighter follow
+  // than HELI (orbit). SHOW uses its sub-cam's role.
+  let posTau  = role === 'photog' ? 0.5 : role === 'heli' ? 0.6 : 0.35;
+  let lookTau = role === 'photog' ? 1.5 : 0.25;
+  // SHOW director sometimes hops between sub-cams; within ~3 s of a hop
+  // ride longer τs so the rotation/translation reads as one cinematic
+  // blend rather than a snap. After that we still keep a softer floor
+  // (0.8 s) than the per-role default to avoid micro-jitter on cuts.
+  if (c === 'show') {
+    const sinceHop = (performance.now() - showDirector.lastSwitchAt) / 1000;
+    if (sinceHop < 3) {
+      posTau  = Math.max(posTau,  1.4);
+      lookTau = Math.max(lookTau, 1.6);
+    } else {
+      lookTau = Math.max(lookTau, 0.8);
+    }
+  }
+  camera.position.lerp(want, 1 - Math.exp(-dt / posTau));
   camLookAt.lerp(look, 1 - Math.exp(-dt / lookTau));
   camera.lookAt(camLookAt);
 }
@@ -2874,6 +2909,22 @@ function bindSetup() {
 }
 bindSetup();
 
+// TRAIL parameter sliders — wire each to its TRAIL_PARAMS field.
+function bindTrailSliders() {
+  const wire = (id, key) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const set = () => { TRAIL_PARAMS[key] = +el.value; };
+    el.addEventListener('input', set); set();
+  };
+  wire('trWidth',   'width');
+  wire('trLife',    'life');
+  wire('trTrack',   'track');
+  wire('trOpacity', 'opacity');
+  wire('trGrow',    'grow');
+}
+bindTrailSliders();
+
 // ---------- Mobile drawer ----------
 (function setupDrawer() {
   const burger = document.getElementById('burger');
@@ -2900,10 +2951,10 @@ document.getElementById('play').addEventListener('click', () => { sim.playing = 
 document.getElementById('pause').addEventListener('click', () => { sim.playing = false; });
 document.getElementById('restart').addEventListener('click', () => { rebuildAndReset(); sim.playing = true; });
 document.getElementById('smokeToggle').addEventListener('click', e => {
-  smokeGlobalOn = !smokeGlobalOn;
-  e.currentTarget.classList.toggle('on', smokeGlobalOn);
+  TRAIL_PARAMS.enabled = !TRAIL_PARAMS.enabled;
+  e.currentTarget.classList.toggle('on', TRAIL_PARAMS.enabled);
   // When turning off, sweep ribbons so the toggle feels immediate.
-  if (!smokeGlobalOn) {
+  if (!TRAIL_PARAMS.enabled) {
     for (const p of planes) {
       if (p.ribbon) {
         for (const e of p.ribbon.left.ring)  e.age = 999;
@@ -2913,8 +2964,8 @@ document.getElementById('smokeToggle').addEventListener('click', e => {
   }
 });
 document.getElementById('trailPersist').addEventListener('click', e => {
-  ribbonPersist = !ribbonPersist;
-  e.currentTarget.classList.toggle('on', ribbonPersist);
+  TRAIL_PARAMS.persist = !TRAIL_PARAMS.persist;
+  e.currentTarget.classList.toggle('on', TRAIL_PARAMS.persist);
   // Switching off → ribbons revert to the normal age-based fade. Switching
   // on → existing entries gain immortality wherever they happen to be.
 });
