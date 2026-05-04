@@ -828,7 +828,9 @@ let dayNight = 'day';
 const skyTop = new THREE.Color(SKY.day.top);
 const skyBot = new THREE.Color(SKY.day.bot);
 scene.background = skyBot.clone();
-scene.fog = new THREE.Fog(SKY.day.fog, 4000, 22000);
+// Fog band tightened so the far ground edge fades into the sky tone
+// well before the geometry runs out — closes the seam at the horizon.
+scene.fog = new THREE.Fog(SKY.day.fog, 2500, 14000);
 
 const camera = new THREE.PerspectiveCamera(55, 1, 0.5, 35000);
 camera.position.set(80, 150, 600);
@@ -887,8 +889,12 @@ function applyDayNight() {
     else if (dayNight === 'night') { skyU.turbidity.value = 18; skyU.rayleigh.value = 0.3; skyU.mieCoefficient.value = 0.002; skyU.mieDirectionalG.value = 0.6; }
     else { skyU.turbidity.value = 2.0; skyU.rayleigh.value = 0.7; skyU.mieCoefficient.value = 0.003; skyU.mieDirectionalG.value = 0.8; }
     refreshSkyEnvironment();
-    // Use the sky shader as the visible background — no static color.
+    // The Sky shader sphere covers the whole frustum, so we don't need
+    // a static background color; but renderer.setClearColor() guarantees
+    // any seams between the sphere and its envelope still show the sky
+    // bottom tone instead of pure black.
     scene.background = null;
+    renderer.setClearColor(s.bot);
   } else {
     scene.background = new THREE.Color(s.bot);
   }
@@ -906,7 +912,10 @@ function applyDayNight() {
 // IBL stays consistent with the visible sky.
 import {Sky} from './vendor/three/examples/jsm/objects/Sky.js';
 const sky = new Sky();
-sky.scale.setScalar(20000);
+// Sky sphere has to be larger than camera.far (35 km) AND larger than the
+// ground plane (30 km). Otherwise the corners of the camera frustum see
+// past the sky sphere and we get black "cracks" along the horizon.
+sky.scale.setScalar(34000);
 scene.add(sky);
 const skyU = sky.material.uniforms;
 // Initial values match SKY.day in applyDayNight() — keeps the sky a
@@ -1301,7 +1310,11 @@ function loadAirportFromVenue(venue) {
     m.position.x -= (box2.min.x + box2.max.x) / 2 - (venue.airportOffset?.x || 0);
     m.position.z -= (box2.min.z + box2.max.z) / 2 - (venue.airportOffset?.z || 0);
     m.position.y -= box2.min.y;
-    m.traverse(c => { if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; }});
+    // Airport receives shadows (so plane shadows land on the runway) but
+    // doesn't cast them — the entire 71-mesh model going through the
+    // shadow pass was a non-trivial GPU cost for static geometry that
+    // mostly sits outside the shadow camera's 800m frustum anyway.
+    m.traverse(c => { if (c.isMesh) { c.castShadow = false; c.receiveShadow = true; }});
     // Detect runway slab top: pick the mesh with the longest Z extent
     // that is at most a meter or two thick (the actual tarmac strip),
     // and remember its world-space top so planes never spawn through it.
