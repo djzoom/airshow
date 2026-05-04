@@ -650,7 +650,7 @@ const TASK_DEFS = {
 // Default sample plan
 const plan = {
   preset: 'BAYI',
-  team: { size:6, initialFormation:'TRAIL' },
+  team: { size:6, initialFormation:'V' },
   alt:   { min:150, max:500, cruise:300 },
   speed: { min:80, max:140, cruise:110 },
   takeoffTime: 0,
@@ -709,11 +709,14 @@ const FORMATIONS = {
   LINE:  (n, i) => new THREE.Vector3((i-(n-1)/2)*16, 0, 0),
   ECHELON_R: (n, i) => new THREE.Vector3(i*14, 0, i*10),
   ECHELON_L: (n, i) => new THREE.Vector3(-i*14, 0, i*10),
+  // Tight V — chord 9 m, sweep-back 8 m per rank. For 6 ships the
+  // outermost is at ±27 m (well inside a 60 m runway), and the visual
+  // wedge stays compact enough to read as one unit.
   V: (n, i) => {
     if (i === 0) return new THREE.Vector3(0, 0, 0);
     const half = Math.ceil(i/2);
     const side = (i%2 === 1) ? -1 : 1;
-    return new THREE.Vector3(side*half*13, 0, half*11);
+    return new THREE.Vector3(side*half*9, 0, half*8);
   },
   DIAMOND: (n, i) => {
     // 4-plane diamond plus extras trailing
@@ -1378,7 +1381,7 @@ const TEAM_PRESETS = {
     modelOrient: { x: 0, y: Math.PI/2, z: 0 },
     modelScale: 8,
     teamSize: 6,
-    initialFormation: 'TRAIL',
+    initialFormation: 'V',
     bodyColors: [0xe73327, 0xffffff, 0x1f4cb8, 0x1f4cb8, 0xe73327, 0xffffff],
     smokeColors: [0xe73327, 0xffffff, 0x1f4cb8],
     smokeAssign: [0, 1, 2, 0, 1, 2],
@@ -1392,7 +1395,7 @@ const TEAM_PRESETS = {
     modelOrient: { x: 0, y: Math.PI/2, z: 0 },
     modelScale: 8,
     teamSize: 6,
-    initialFormation: 'TRAIL',
+    initialFormation: 'V',
     bodyColors: [0xffffff, 0xe53b3b, 0x1f3fa8, 0xffffff, 0xe53b3b, 0x1f3fa8],
     smokeColors: [0xffffff],
     smokeAssign: [0, 0, 0, 0, 0, 0],
@@ -1420,7 +1423,7 @@ const TEAM_PRESETS = {
     modelOrient: { x: 0, y: Math.PI, z: 0 },
     modelScale: 9,
     teamSize: 6,
-    initialFormation: 'TRAIL',
+    initialFormation: 'V',
     // White / blue / red Russian tricolor distribution
     bodyColors: [0xffffff, 0x1c4dab, 0xd0142d, 0xffffff, 0x1c4dab, 0xd0142d],
     smokeColors: [0xffffff, 0x1c4dab, 0xd0142d],
@@ -2359,12 +2362,25 @@ function frame(now) {
     advanceSim(dt);
   }
 
-  // Smooth pursuit: lerp planes toward target
+  // Smooth pursuit: lerp planes toward target — except during TAKEOFF,
+  // where the formation rolls down the runway as a rigid element so the
+  // wingmen exactly match the leader's physical acceleration. (lerp lag
+  // there made the rear wingmen look like they teleport-accelerated to
+  // catch up, which is what real display teams never do — they all roll
+  // together in formation, see Red Arrows / Diamond / element takeoffs.)
+  const curMod = (sim.curIdx >= 0) ? plan.modules[sim.curIdx] : null;
+  const rigid = curMod && curMod.type === 'TAKEOFF';
   const followK = 1 - Math.exp(-6 * dt);
   const turnK   = 1 - Math.exp(-5 * dt);
-  for (const p of planes) {
-    p.position.lerp(p.targetPos, followK);
-    p.quaternion.slerp(p.targetQuat, turnK);
+  for (let pi = 0; pi < planes.length; pi++) {
+    const p = planes[pi];
+    if (rigid && pi > 0) {
+      p.position.copy(p.targetPos);
+      p.quaternion.copy(p.targetQuat);
+    } else {
+      p.position.lerp(p.targetPos, followK);
+      p.quaternion.slerp(p.targetQuat, turnK);
+    }
     p.apply();
     p.updateGear();
     spawnSmoke(p, dt);
