@@ -1937,17 +1937,23 @@ for (const ps of Object.values(TEAM_PRESETS)) loadModelOnce(ps.model, ps.modelOr
 //     factor that brightens the freshest puffs near the engine.
 //   • render: one draw call per plane, additive-soft alpha blend, with a
 //     soft circular gradient texture computed in the fragment shader.
+// Smoke is the headline visual of an air-display sim, so the puffs are
+// tuned to read as a thick coloured cloud at every camera distance:
+//   • 4 m initial radius gives ~10 px even at 300 m (PHOTOG range)
+//   • slower growth keeps the colour saturated mid-life
+//   • lower per-puff alpha (0.55) lets dense overlap stack into a tube
+//     instead of fighting itself with full-opacity squares
 const TRAIL_PARAMS = {
   enabled:  true,
   persist:  false,
-  mode:     'dual',   // 'single' | 'dual' | 'wingtip'
-  width:    1.4,      // initial puff radius (m) — bigger nozzle for visibility
-  grow:     3.5,      // radius growth (m/s) — puff really blooms
-  life:     6.0,      // particle lifetime (s) — longer trail behind the jet
-  track:    3.0,      // dual/wingtip nozzle half-spacing (m)
-  opacity:  0.95,
-  ringLen:  320,      // particles per plane — denser plume
-  emitDt:   0.025,    // emission interval (s) — 40 Hz, continuous-looking stream
+  mode:     'dual',
+  width:    4.0,
+  grow:     2.6,
+  life:     7.0,
+  track:    2.5,
+  opacity:  0.55,
+  ringLen:  380,
+  emitDt:   0.030,
 };
 
 // Drift constants — gentle so old smoke "settles" instead of hovering.
@@ -1978,8 +1984,8 @@ const trailPointsMat = new THREE.ShaderMaterial({
       vColor = aColor;
       vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
       // Perspective sizing: pixel size = world radius * (focal / depth)
-      gl_PointSize = aSize * (450.0 / max(1.0, -mvPos.z));
-      gl_PointSize = clamp(gl_PointSize, 3.0, 320.0);
+      gl_PointSize = aSize * (600.0 / max(1.0, -mvPos.z));
+      gl_PointSize = clamp(gl_PointSize, 8.0, 420.0);
       gl_Position = projectionMatrix * mvPos;
     }`,
   fragmentShader: `
@@ -1994,9 +2000,13 @@ const trailPointsMat = new THREE.ShaderMaterial({
       if (r2 >= 1.0) discard;
       float disk = (1.0 - r2);
       disk *= disk;                   // squared falloff = soft puff
-      // Hot-core glow: warm-white bloom at the freshest emission.
-      vec3 col = mix(vColor, vec3(1.0, 0.95, 0.85), vHead * 0.55);
-      col *= 1.15 + vHead * 0.85;
+      // Saturated colour for the trailing plume; warm-white hot core
+      // only at the freshest emission so the team colours stay clean.
+      vec3 col = vColor;
+      if (vHead > 0.0) {
+        col = mix(col, vec3(1.0, 0.95, 0.85), vHead * 0.50);
+        col *= 1.0 + vHead * 0.50;
+      }
       gl_FragColor = vec4(col, disk * vAlpha);
     }`,
 });
@@ -2683,16 +2693,13 @@ function updatePlaneTargets(dt, mod, mt) {
       off = new THREE.Vector3(side * (40 + Math.abs(split)) + subOff.x, 0, subOff.z);
       if (t > 0.4 && t < 0.6) off.x = side * split * -1; // mirror crossing
     } else if (mod && mod.type === 'BREAK_LANDING') {
-      // each plane peels off at staggered intervals; fall behind leader and descend faster
-      const offset = formationOffset('TRAIL', n, i);
-      const peelStart = 0.05 + i * 0.10; // each plane peels at this fraction
-      const t = sim.landingPhase ?? 0;
-      const own = clamp01((t - peelStart) / 0.15);
-      // Lateral peel to crowd-side (negative X) increasing with own
-      off = offset.clone();
-      off.x -= own * 25;
-      // Add extra trailing distance for staggered touchdown
-      off.z += own * 80;
+      // Land in formation: every wingman holds its TRAIL slot relative to
+      // the leader. The leader is doing the glide → flare → rollout in
+      // MOD_BREAK_LANDING, so wingmen just need to track. Earlier code
+      // here forced a per-plane "peel and descend" with off.z += own*80
+      // and a Y override to 5 — that pushed wingmen behind/below the
+      // runway, leaving only their vertical tails above the slab.
+      off = formationOffset('TRAIL', n, i);
     } else {
       // Smooth morph between formations
       const a = fromOff(i);
@@ -2712,13 +2719,10 @@ function updatePlaneTargets(dt, mod, mt) {
       if (p.targetPos.y < groundY) p.targetPos.y = groundY;
     }
 
-    // Special behavior for landing: drop to runway during peel
-    if (mod && mod.type === 'BREAK_LANDING') {
-      const t = sim.landingPhase ?? 0;
-      const peelStart = 0.05 + i * 0.10;
-      const own = clamp01((t - peelStart) / 0.45);
-      p.targetPos.y = Math.max(5, p.targetPos.y * (1-own) + 5*own);
-    }
+    // (Old per-plane "drop to Y=5 during peel" override removed — it
+    // forced wingmen below the actual RUNWAY_TOP_Y so only the vertical
+    // tail poked above the tarmac at touchdown. The leader's glide-path
+    // altitude in MOD_BREAK_LANDING is the formation's altitude now.)
 
     // Target orientation: leader's, with bank into turns and module-specific tweaks
     p.targetQuat.copy(lq);
