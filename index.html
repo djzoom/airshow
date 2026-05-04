@@ -873,6 +873,43 @@ orbit.maxPolarAngle = Math.PI * 0.49;  // can't dive under the ground
 orbit.target.set(0, 100, 0);
 orbit.enabled = false;
 
+// ---------- Mouse-wheel + pinch zoom (cinematic modes) ----------
+// FREE / FOLLOW already get wheel zoom from OrbitControls. For SHOW /
+// PHOTOG / HELI / WING / TAIL we expose a sim.zoom multiplier that the
+// camera FOV picks up — wheel up = zoom in (longer lens), wheel down = out.
+renderer.domElement.addEventListener('wheel', (e) => {
+  // Don't fight OrbitControls when it's the active camera.
+  if (sim.cam === 'free' || sim.cam === 'follow') return;
+  e.preventDefault();
+  // Exponential step keeps the perceived zoom rate uniform across the
+  // wheel range. Negative deltaY = wheel forward = zoom in.
+  const k = Math.exp(-e.deltaY * 0.0015);
+  sim.zoom = Math.max(0.4, Math.min(3.0, sim.zoom * k));
+}, { passive: false });
+
+// Pinch-to-zoom for touch screens (mobile cinematic modes).
+let _pinchD0 = 0;
+let _pinchZ0 = 1;
+renderer.domElement.addEventListener('touchstart', (e) => {
+  if (sim.cam === 'free' || sim.cam === 'follow') return;
+  if (e.touches.length === 2) {
+    const dx = e.touches[0].clientX - e.touches[1].clientX;
+    const dy = e.touches[0].clientY - e.touches[1].clientY;
+    _pinchD0 = Math.hypot(dx, dy);
+    _pinchZ0 = sim.zoom;
+  }
+}, { passive: true });
+renderer.domElement.addEventListener('touchmove', (e) => {
+  if (sim.cam === 'free' || sim.cam === 'follow') return;
+  if (e.touches.length === 2 && _pinchD0 > 0) {
+    e.preventDefault();
+    const dx = e.touches[0].clientX - e.touches[1].clientX;
+    const dy = e.touches[0].clientY - e.touches[1].clientY;
+    const d  = Math.hypot(dx, dy);
+    sim.zoom = Math.max(0.4, Math.min(3.0, _pinchZ0 * (d / _pinchD0)));
+  }
+}, { passive: false });
+
 // Lights
 const sun = new THREE.DirectionalLight(0xfff2cc, 1.15);
 sun.position.set(500, 800, 300);
@@ -1858,250 +1895,223 @@ function makeFallbackPlane(color) {
 // Pre-warm all preset models in parallel so switching presets is instant.
 for (const ps of Object.values(TEAM_PRESETS)) loadModelOnce(ps.model, ps.modelOrient);
 
-// ---------- Smoke trails (ribbon strip, per plane) ----------
-// Each plane keeps a ring buffer of recent positions and we extrude a
-// triangle strip with two vertices per ring entry: the plane's position
-// + and - the lateral "wing" offset. Per-vertex alpha fades the tail,
-// per-vertex width grows so the ribbon broadens as it drifts away.
-//
-// Why this shape: aerial display teams emit colored vapor from wingtip
-// pods or a centerline pylon, which reads as a soft flat plume to the
-// camera, not a stack of puffs. Strip geometry captures that with one
-// draw call per plane.
-// (TRAIL_PARAMS.enabled / TRAIL_PARAMS.persist are now TRAIL_PARAMS.enabled / .persist)
-// ---------- TRAIL_PARAMS ----------
-// All smoke / trail tuning lives in this single object so it can be
-// driven from the UI sliders below. The "smoke" and "trail" used to be
-// described as two separate things but are actually one ribbon system,
-// so we now use the umbrella term TRAIL everywhere.
+// ---------- Smoke trails (billboarded particle puffs, per plane) ----------
+// The previous ribbon implementation read as a flat painted stripe — a
+// triangle strip can show direction but never "volume". Real display-team
+// smoke is a stream of soft, expanding puffs that drift, sag and disperse.
+// This system uses THREE.Points with per-particle CPU simulation:
+//   • emit: 25–40 Hz from each active nozzle (single / dual / wingtip)
+//   • each puff has position, velocity (with drag toward ambient wind),
+//     gravity sag, growing radius, fading alpha, and a hot-core "head"
+//     factor that brightens the freshest puffs near the engine.
+//   • render: one draw call per plane, additive-soft alpha blend, with a
+//     soft circular gradient texture computed in the fragment shader.
 const TRAIL_PARAMS = {
-  enabled:  true,    // global on / off (was TRAIL_PARAMS.enabled)
-  persist:  false,   // skywriting mode (was TRAIL_PARAMS.persist)
-  mode:     'dual',  // 'single' (one centered strand) | 'dual' (twin nozzle)
-                     //   | 'wingtip' (wide spacing for vortex-style trails)
-  width:    1.1,     // half-width at the head, metres
-  grow:     0.045,   // half-width gain per second of age
-  life:     5.0,     // seconds before a slot fades to 0 (ignored if persist)
-  track:    4.5,     // half-distance between the twin strands, metres
-  opacity:  0.95,    // peak alpha at the head
-  // Fixed at build time — change requires recreating ribbon meshes
-  ringLen:  220,
-  emitDt:   0.04,
+  enabled:  true,
+  persist:  false,
+  mode:     'dual',   // 'single' | 'dual' | 'wingtip'
+  width:    0.8,      // initial puff radius (m) — small at the nozzle
+  grow:     2.2,      // radius growth (m/s) — puff inflates as it ages
+  life:     4.0,      // particle lifetime (s)
+  track:    3.5,      // dual/wingtip nozzle half-spacing (m)
+  opacity:  0.85,
+  ringLen:  220,      // particles per plane (dual mode emits 2 / tick)
+  emitDt:   0.040,    // emission interval (s) — 25 Hz keeps overdraw sane
 };
 
-// Backwards-compatible aliases (lots of call sites read these constants
-// directly; pointing them at TRAIL_PARAMS keeps the diff small).
-const RIBBON_LEN    = TRAIL_PARAMS.ringLen;
-const RIBBON_DT     = TRAIL_PARAMS.emitDt;
+// Drift constants — gentle so old smoke "settles" instead of hovering.
+const TRAIL_GRAV   = 0.55;
+const TRAIL_WIND_X = 0.10;
+const TRAIL_WIND_Z = 0.05;
+const TRAIL_TURB   = 0.9;     // m/s² random scatter (per √dt, on velocity)
 
-// Two ribbons per plane — one off the left wing-root, one off the right.
-// Display teams (Frecce, Red Arrows, Patrouille de France) emit from
-// twin nozzles and the visible plume reads as parallel lines, not one
-// fat strip. We share the same ShaderMaterial across both sides.
-// (TRAIL_PARAMS.track lives in the TRAIL_PARAMS object)
-
-// Ribbon material:
-//   - aSide  = +1 on the upper rim, -1 on the lower rim. Used to feather
-//              the strip edges so the ribbon looks like a soft plume rather
-//              than a flat geometric rectangle.
-//   - aHead  = 1.0 at the freshest sample, 0.0 at the tail. Drives a
-//              subtle luminance boost near the nozzle so freshly-emitted
-//              smoke reads bright (real smoke is hottest at exit).
-const ribbonShaderMat = new THREE.ShaderMaterial({
+// Shared particle material. ShaderMaterial declares position automatically;
+// we add aColor/aSize/aAlpha/aHead per-particle attributes. Soft circular
+// alpha falloff in the fragment shader is what gives each puff its
+// volumetric look at any zoom level.
+const trailPointsMat = new THREE.ShaderMaterial({
   transparent: true,
   depthWrite: false,
   blending: THREE.NormalBlending,
-  side: THREE.DoubleSide,
   vertexShader: `
-    attribute vec3 color;
+    attribute vec3 aColor;
+    attribute float aSize;
     attribute float aAlpha;
-    attribute float aSide;
     attribute float aHead;
     varying float vAlpha;
-    varying float vSide;
     varying float vHead;
     varying vec3 vColor;
     void main() {
       vAlpha = aAlpha;
-      vSide  = aSide;
       vHead  = aHead;
-      vColor = color;
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      vColor = aColor;
+      vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+      // Perspective sizing: pixel size = world radius * (focal / depth)
+      gl_PointSize = aSize * (320.0 / max(1.0, -mvPos.z));
+      gl_PointSize = clamp(gl_PointSize, 2.0, 220.0);
+      gl_Position = projectionMatrix * mvPos;
     }`,
   fragmentShader: `
     varying float vAlpha;
-    varying float vSide;
     varying float vHead;
     varying vec3 vColor;
     void main() {
-      if (vAlpha < 0.02) discard;
-      // Soft horizontal feather: full at strip centerline, zero at rim.
-      float edge = 1.0 - smoothstep(0.55, 1.0, abs(vSide));
-      // Head glow: brighten the freshest 20% of the strand.
-      float headGlow = smoothstep(0.78, 1.0, vHead);
-      vec3 c = vColor * (1.12 + headGlow * 0.55);
-      // A pinch of warm white at the very head so the nozzle reads hot.
-      c = mix(c, vec3(1.0, 0.95, 0.88), headGlow * 0.35);
-      gl_FragColor = vec4(c, vAlpha * edge);
+      if (vAlpha < 0.005) discard;
+      // Soft circular gradient (Gaussian-ish): full at center, 0 at rim.
+      vec2 c = gl_PointCoord - 0.5;
+      float r2 = dot(c, c) * 4.0;     // 0 at center, 1 at edge
+      if (r2 >= 1.0) discard;
+      float disk = (1.0 - r2);
+      disk *= disk;                   // squared falloff = soft puff
+      // Hot-core glow: warm-white bloom at the freshest emission.
+      vec3 col = mix(vColor, vec3(1.0, 0.95, 0.85), vHead * 0.45);
+      col *= 1.0 + vHead * 0.55;
+      gl_FragColor = vec4(col, disk * vAlpha);
     }`,
 });
 
-function makeRibbonStrand(plane) {
-  // Build one strip + ring buffer; we'll create two of these per plane.
-  const n = RIBBON_LEN;
-  const positions = new Float32Array(n * 2 * 3);
-  const colors    = new Float32Array(n * 2 * 3);
-  const alphas    = new Float32Array(n * 2);
-  const sides     = new Float32Array(n * 2);  // +1 / -1 per rim
-  const heads     = new Float32Array(n * 2);  // 0 (tail) .. 1 (fresh head)
-  const indices   = [];
-  for (let i=0;i<n-1;i++) {
-    const a = i*2, b = i*2+1, c = (i+1)*2, d = (i+1)*2+1;
-    indices.push(a, c, b);
-    indices.push(b, c, d);
+class TrailSystem {
+  constructor(plane) {
+    this.color = new THREE.Color(plane.smokeColor);
+    const N = TRAIL_PARAMS.ringLen;
+    this.N = N;
+    // CPU-side particle state (SoA layout for cache-friendly updates).
+    this.posA   = new Float32Array(N * 3);
+    this.velA   = new Float32Array(N * 3);
+    this.colA   = new Float32Array(N * 3);
+    this.sizeA  = new Float32Array(N);
+    this.alphaA = new Float32Array(N);
+    this.headA  = new Float32Array(N);
+    this.ageA   = new Float32Array(N);
+    for (let i = 0; i < N; i++) this.ageA[i] = 1e6;   // mark all dead
+    this.next = 0;
+    this.emitTimer = 0;
+    // GPU geometry — single Points draw call per plane.
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(this.posA, 3));
+    geo.setAttribute('aColor',   new THREE.BufferAttribute(this.colA, 3));
+    geo.setAttribute('aSize',    new THREE.BufferAttribute(this.sizeA, 1));
+    geo.setAttribute('aAlpha',   new THREE.BufferAttribute(this.alphaA, 1));
+    geo.setAttribute('aHead',    new THREE.BufferAttribute(this.headA, 1));
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6);
+    this.geo = geo;
+    this.points = new THREE.Points(geo, trailPointsMat);
+    this.points.frustumCulled = false;
+    scene.add(this.points);
   }
-  // aSide is constant per vertex; bake once.
-  for (let i=0;i<n;i++) { sides[i*2] = 1.0; sides[i*2+1] = -1.0; }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  geo.setAttribute('aAlpha', new THREE.BufferAttribute(alphas, 1));
-  geo.setAttribute('aSide',  new THREE.BufferAttribute(sides, 1));
-  geo.setAttribute('aHead',  new THREE.BufferAttribute(heads, 1));
-  geo.setIndex(indices);
-  const mesh = new THREE.Mesh(geo, ribbonShaderMat);
-  mesh.frustumCulled = false;
-  scene.add(mesh);
-  const ring = [];
-  for (let i=0;i<n;i++) ring.push({ pos:new THREE.Vector3(), right:new THREE.Vector3(), age: 1e9 });
-  return { mesh, geo, ring, head: 0 };
-}
-
-function makeRibbon(plane) {
-  plane.ribbon = {
-    left:  makeRibbonStrand(plane),
-    right: makeRibbonStrand(plane),
-    fillTimer: 0,
-    color: new THREE.Color(plane.smokeColor),
-  };
-}
-
-function disposeRibbon(plane) {
-  if (!plane.ribbon) return;
-  for (const side of ['left', 'right']) {
-    const s = plane.ribbon[side];
-    scene.remove(s.mesh);
-    s.geo.dispose();
+  emit(x, y, z) {
+    const i = this.next;
+    const j3 = i * 3;
+    this.posA[j3]   = x;
+    this.posA[j3+1] = y;
+    this.posA[j3+2] = z;
+    // Tiny initial velocity scatter so puffs don't all march in lockstep.
+    this.velA[j3]   = (Math.random() - 0.5) * 0.6;
+    this.velA[j3+1] = (Math.random() - 0.5) * 0.4;
+    this.velA[j3+2] = (Math.random() - 0.5) * 0.6;
+    this.colA[j3]   = this.color.r;
+    this.colA[j3+1] = this.color.g;
+    this.colA[j3+2] = this.color.b;
+    this.sizeA[i]   = TRAIL_PARAMS.width;
+    this.alphaA[i]  = TRAIL_PARAMS.opacity;
+    this.headA[i]   = 1.0;
+    this.ageA[i]    = 0;
+    this.next = (i + 1) % this.N;
   }
-  delete plane.ribbon;
+  step(dt) {
+    const persist = !!TRAIL_PARAMS.persist;
+    const lifeMax = TRAIL_PARAMS.life;
+    const grow    = TRAIL_PARAMS.grow;
+    const opacity = TRAIL_PARAMS.opacity;
+    const grav    = TRAIL_GRAV * dt;
+    const turb    = TRAIL_TURB * Math.sqrt(dt);
+    const dragK   = 1 - Math.exp(-dt / 0.7);
+    for (let i = 0; i < this.N; i++) {
+      const age = this.ageA[i];
+      if (!persist && age > lifeMax) {
+        // Already-dead slot: zero size keeps it invisible without branches
+        // elsewhere.
+        if (this.alphaA[i] !== 0) {
+          this.alphaA[i] = 0;
+          this.sizeA[i]  = 0;
+        }
+        continue;
+      }
+      this.ageA[i] = age + dt;
+      const j3 = i * 3;
+      // Gravity + small turbulent jitter on velocity
+      this.velA[j3+1] -= grav;
+      this.velA[j3]   += (Math.random() - 0.5) * turb;
+      this.velA[j3+2] += (Math.random() - 0.5) * turb;
+      // Drag toward the ambient wind
+      this.velA[j3]   += (TRAIL_WIND_X - this.velA[j3])   * dragK;
+      this.velA[j3+1] += (0            - this.velA[j3+1]) * dragK;
+      this.velA[j3+2] += (TRAIL_WIND_Z - this.velA[j3+2]) * dragK;
+      // Integrate
+      this.posA[j3]   += this.velA[j3]   * dt;
+      this.posA[j3+1] += this.velA[j3+1] * dt;
+      this.posA[j3+2] += this.velA[j3+2] * dt;
+      // Grow
+      this.sizeA[i] += grow * dt;
+      // Alpha schedule: hold near full for ~20% then square-root fade.
+      const k = persist ? 1.0 : Math.max(0, 1 - this.ageA[i] / lifeMax);
+      this.alphaA[i] = persist ? opacity * 0.85 : (k * k * opacity);
+      // Hot-core falls off in 0.4 s
+      this.headA[i] = Math.max(0, 1 - this.ageA[i] / 0.4);
+    }
+    this.geo.attributes.position.needsUpdate = true;
+    this.geo.attributes.aColor.needsUpdate   = true;
+    this.geo.attributes.aSize.needsUpdate    = true;
+    this.geo.attributes.aAlpha.needsUpdate   = true;
+    this.geo.attributes.aHead.needsUpdate    = true;
+  }
+  dispose() {
+    scene.remove(this.points);
+    this.geo.dispose();
+  }
 }
 
+// Per-plane attach + cleanup. The old name "disposeRibbon" is kept so
+// buildFleet's existing call site still works.
+function disposeRibbon(p) {
+  if (p.trail) { p.trail.dispose(); delete p.trail; }
+}
+
+const _emitRight = new THREE.Vector3();
+const _emitBack  = new THREE.Vector3();
 function spawnSmoke(p, dt) {
-  if (!p.ribbon) makeRibbon(p);
-  const r = p.ribbon;
-  // Age every entry on both strands.
-  for (const e of r.left.ring)  e.age += dt;
-  for (const e of r.right.ring) e.age += dt;
+  if (!p.trail) p.trail = new TrailSystem(p);
   if (!TRAIL_PARAMS.enabled || !p.smokeOn || !sim.playing) return;
-  r.fillTimer += dt;
-  if (r.fillTimer < RIBBON_DT) return;
-  r.fillTimer = 0;
-  // Strand offset depends on the selected smoke mode:
-  //   single  → both strands write the same centerline point (1 visible
-  //             plume; setting opacity higher compensates for overdraw)
-  //   dual    → twin nozzles ±track from centerline (default)
-  //   wingtip → wide spacing for the vortex-trail look (track*2.4)
-  const right = new THREE.Vector3(1,0,0).applyQuaternion(p.quaternion);
-  const back  = new THREE.Vector3(0, -0.4, 4.2).applyQuaternion(p.quaternion);
-  const cx = p.position.x + back.x;
-  const cy = p.position.y + back.y;
-  const cz = p.position.z + back.z;
-  let off;
-  switch (TRAIL_PARAMS.mode) {
-    case 'single':  off = 0; break;
-    case 'wingtip': off = TRAIL_PARAMS.track * 2.4; break;
-    default:        off = TRAIL_PARAMS.track;
-  }
-  // Left strand
-  {
-    const e = r.left.ring[r.left.head];
-    e.pos.set(cx - right.x * off, cy - right.y * off, cz - right.z * off);
-    e.right.copy(right);
-    e.age = 0;
-    r.left.head = (r.left.head + 1) % RIBBON_LEN;
-  }
-  // Right strand
-  {
-    const e = r.right.ring[r.right.head];
-    e.pos.set(cx + right.x * off, cy + right.y * off, cz + right.z * off);
-    e.right.copy(right);
-    e.age = 0;
-    r.right.head = (r.right.head + 1) % RIBBON_LEN;
-  }
-}
-
-// Drift constants — small enough to read as "settling air" rather than wind.
-const TRAIL_GRAV   = 0.45;   // m/s² — vertical sag of old smoke
-const TRAIL_WIND_X = 0.12;   // m/s — gentle horizontal drift
-const TRAIL_WIND_Z = 0.08;
-function _updateStrand(s, color) {
-  const pos = s.geo.attributes.position.array;
-  const col = s.geo.attributes.color.array;
-  const alp = s.geo.attributes.aAlpha.array;
-  const hed = s.geo.attributes.aHead.array;
-  const persist = !!TRAIL_PARAMS.persist;
-  const lifeMax = TRAIL_PARAMS.life;
-  for (let i=0;i<RIBBON_LEN;i++) {
-    const ringIdx = (s.head - 1 - i + RIBBON_LEN) % RIBBON_LEN;
-    const e = s.ring[ringIdx];
-    const k = i*2*3;
-    const dead = !persist && e.age > lifeMax;
-    const empty = e.age > 1e6;
-    if (dead || empty) {
-      alp[i*2] = 0; alp[i*2+1] = 0;
-      hed[i*2] = 0; hed[i*2+1] = 0;
-      pos[k] = pos[k+1] = pos[k+2] = pos[k+3] = pos[k+4] = pos[k+5] = 0;
-      continue;
+  p.trail.emitTimer += dt;
+  if (p.trail.emitTimer < TRAIL_PARAMS.emitDt) return;
+  // Catch up missed steps (in case of frame hitch) but cap at 4 to avoid
+  // a thousand-puff burst after a long pause.
+  let bursts = 0;
+  while (p.trail.emitTimer >= TRAIL_PARAMS.emitDt && bursts < 4) {
+    p.trail.emitTimer -= TRAIL_PARAMS.emitDt;
+    bursts++;
+    _emitRight.set(1, 0, 0).applyQuaternion(p.quaternion);
+    _emitBack.set(0, -0.4, 4.2).applyQuaternion(p.quaternion);
+    const cx = p.position.x + _emitBack.x;
+    const cy = p.position.y + _emitBack.y;
+    const cz = p.position.z + _emitBack.z;
+    let off;
+    switch (TRAIL_PARAMS.mode) {
+      case 'single':  off = 0; break;
+      case 'wingtip': off = TRAIL_PARAMS.track * 2.4; break;
+      default:        off = TRAIL_PARAMS.track;
     }
-    const wAge = Math.min(e.age, lifeMax);
-    const w = TRAIL_PARAMS.width + wAge * TRAIL_PARAMS.grow;
-    // Drift: older samples sag and waft slightly. Quadratic gravity, linear wind.
-    const sag = 0.5 * TRAIL_GRAV * wAge * wAge;
-    const dx  = TRAIL_WIND_X * wAge;
-    const dz  = TRAIL_WIND_Z * wAge;
-    const ex = e.pos.x + dx;
-    const ey = e.pos.y - sag;
-    const ez = e.pos.z + dz;
-    pos[k+0] = ex + e.right.x * w;
-    pos[k+1] = ey + e.right.y * w;
-    pos[k+2] = ez + e.right.z * w;
-    pos[k+3] = ex - e.right.x * w;
-    pos[k+4] = ey - e.right.y * w;
-    pos[k+5] = ez - e.right.z * w;
-    col[k+0] = color.r; col[k+1] = color.g; col[k+2] = color.b;
-    col[k+3] = color.r; col[k+4] = color.g; col[k+5] = color.b;
-    let a;
-    if (persist) a = TRAIL_PARAMS.opacity * 0.9;
-    else {
-      const ageK = Math.max(0, 1 - e.age / lifeMax);
-      a = ageK * ageK * TRAIL_PARAMS.opacity;
+    if (off === 0) {
+      p.trail.emit(cx, cy, cz);
+    } else {
+      p.trail.emit(cx - _emitRight.x * off, cy - _emitRight.y * off, cz - _emitRight.z * off);
+      p.trail.emit(cx + _emitRight.x * off, cy + _emitRight.y * off, cz + _emitRight.z * off);
     }
-    alp[i*2] = a; alp[i*2+1] = a;
-    // aHead: 1 at fresh emission (i=0), fading over the first 20% of the
-    // strand. Drives the warm-white nozzle bloom in the fragment shader.
-    const hk = Math.max(0, 1 - i / (RIBBON_LEN * 0.22));
-    hed[i*2] = hk; hed[i*2+1] = hk;
   }
-  s.geo.attributes.position.needsUpdate = true;
-  s.geo.attributes.color.needsUpdate = true;
-  s.geo.attributes.aAlpha.needsUpdate = true;
-  s.geo.attributes.aHead.needsUpdate = true;
 }
 
 function updateSmoke(p, dt) {
-  if (!p.ribbon) return;
-  _updateStrand(p.ribbon.left,  p.ribbon.color);
-  _updateStrand(p.ribbon.right, p.ribbon.color);
+  if (p.trail) p.trail.step(dt);
 }
 
 // ---------- Leader "virtual" state ----------
@@ -2127,6 +2137,7 @@ const sim = {
   pendingRegroup: null,
   cam: 'show',
   gearForce: false,    // landing module sets this true; gear extends regardless of AGL
+  zoom: 1.0,           // user FOV multiplier — wheel/pinch in cinematic modes (>1 = zoom in)
 };
 
 // Leader state: pure quaternion. Plane-forward = -Z in body frame (Three.js convention).
@@ -2924,8 +2935,11 @@ const camTmp = new THREE.Vector3();
 
 const camLookAt = new THREE.Vector3(0, 100, 0);
 
-// Lens (FOV deg) per cam role. Smoothly lerped each frame.
-const CAM_FOV = { show:50, photog:30, heli:45, wing:55, free:55 };
+// Lens (FOV deg) per cam role. Smoothly lerped each frame. Effective FOV
+// = base / sim.zoom so the wheel handler below provides a uniform zoom
+// across every cinematic mode (FREE / FOLLOW use OrbitControls dolly).
+const CAM_FOV = { show:50, photog:30, heli:45, wing:55, free:55, tail:50 };
+const ZOOM_MIN = 0.4, ZOOM_MAX = 3.0;     // FOV multiplier limits
 
 // Hand-held jitter — disabled. The micro-noise reads as a vibrating
 // camera and was causing motion fatigue. Left as a no-op so the call
@@ -3053,10 +3067,18 @@ function updateCamera(dt) {
     // smoothing so loops/rolls don't yank the framing.
     const lp = planes[0].position;
     const lq = planes[0].quaternion;
-    const back = new THREE.Vector3(0, 4, 18).applyQuaternion(lq);
+    // sim.zoom narrows the effective FOV; pull the camera in toward the
+    // jet at the same time so a long-lens look reads as actually closer.
+    const dist = 18 / Math.sqrt(Math.max(0.4, sim.zoom));
+    const high = 4 / Math.sqrt(Math.max(0.4, sim.zoom));
+    const back = new THREE.Vector3(0, high, dist).applyQuaternion(lq);
     const want = new THREE.Vector3().copy(lp).add(back);
     const ahead = new THREE.Vector3(0, 1.2, -25).applyQuaternion(lq);
     const look = new THREE.Vector3().copy(lp).add(ahead);
+    // FOV lerp so wheel zoom narrows the lens too.
+    const targetFovT = (CAM_FOV.tail || 50) / Math.max(0.4, sim.zoom);
+    camera.fov += (targetFovT - camera.fov) * (1 - Math.exp(-dt / 0.4));
+    camera.updateProjectionMatrix();
     // Soft camera follow — feels like a chase plane with mass, not a snap.
     camera.position.lerp(want, 1 - Math.exp(-dt / 0.18));
     // Up vector blends between world up and body up so the horizon
@@ -3107,7 +3129,9 @@ function updateCamera(dt) {
   else                        camPhotog(now, want, look);
 
   // Smooth FOV (lens) lerp toward target — slow zoom feels cinematic.
-  const targetFov = CAM_FOV[role] || 50;
+  // sim.zoom (1.0 default) is divided in so wheel zoom narrows the lens.
+  const baseFov   = CAM_FOV[role] || 50;
+  const targetFov = Math.max(8, Math.min(95, baseFov / Math.max(0.4, sim.zoom)));
   const fovK = 1 - Math.exp(-dt / 0.5);
   camera.fov += (targetFov - camera.fov) * fovK;
   camera.updateProjectionMatrix();
@@ -3444,13 +3468,10 @@ document.getElementById('floatPlay').addEventListener('click', e => {
 document.getElementById('smokeToggle').addEventListener('click', e => {
   TRAIL_PARAMS.enabled = !TRAIL_PARAMS.enabled;
   e.currentTarget.classList.toggle('on', TRAIL_PARAMS.enabled);
-  // When turning off, sweep ribbons so the toggle feels immediate.
+  // When turning off, age out all live puffs so the toggle reads instant.
   if (!TRAIL_PARAMS.enabled) {
     for (const p of planes) {
-      if (p.ribbon) {
-        for (const e of p.ribbon.left.ring)  e.age = 999;
-        for (const e of p.ribbon.right.ring) e.age = 999;
-      }
+      if (p.trail) for (let i = 0; i < p.trail.N; i++) p.trail.ageA[i] = 1e6;
     }
   }
 });
@@ -3564,11 +3585,9 @@ function teleportToShowAlt() {
     p.quaternion.copy(lq);
     p.targetPos.copy(p.position);
     p.targetQuat.copy(p.quaternion);
-    // Sweep any old ribbon points so the trail starts fresh in the air.
-    if (p.ribbon) {
-      for (const e of p.ribbon.left.ring)  e.age = 999;
-      for (const e of p.ribbon.right.ring) e.age = 999;
-    }
+    // Age out any leftover puffs so a re-seat doesn't drag a contrail
+    // across the world from the prior position.
+    if (p.trail) for (let k = 0; k < p.trail.N; k++) p.trail.ageA[k] = 1e6;
   }
 }
 
