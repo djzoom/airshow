@@ -1937,23 +1937,22 @@ for (const ps of Object.values(TEAM_PRESETS)) loadModelOnce(ps.model, ps.modelOr
 //     factor that brightens the freshest puffs near the engine.
 //   • render: one draw call per plane, additive-soft alpha blend, with a
 //     soft circular gradient texture computed in the fragment shader.
-// Smoke is the headline visual of an air-display sim, so the puffs are
-// tuned to read as a thick coloured cloud at every camera distance:
-//   • 4 m initial radius gives ~10 px even at 300 m (PHOTOG range)
-//   • slower growth keeps the colour saturated mid-life
-//   • lower per-puff alpha (0.55) lets dense overlap stack into a tube
-//     instead of fighting itself with full-opacity squares
+// Smoke params tuned for legibility AND GPU safety: 4 m × 380 puffs × 6
+// planes × 420 px max put enough overdraw on the GPU to lose the WebGL
+// context (which then tanked the cloned GLB plane meshes back to the
+// procedural fallback). These conservative values give a thick coloured
+// streamer without context loss.
 const TRAIL_PARAMS = {
   enabled:  true,
   persist:  false,
   mode:     'dual',
-  width:    4.0,
-  grow:     2.6,
-  life:     7.0,
+  width:    2.0,
+  grow:     2.0,
+  life:     5.0,
   track:    2.5,
-  opacity:  0.55,
-  ringLen:  380,
-  emitDt:   0.030,
+  opacity:  0.6,
+  ringLen:  220,
+  emitDt:   0.040,
 };
 
 // Drift constants — gentle so old smoke "settles" instead of hovering.
@@ -1984,8 +1983,8 @@ const trailPointsMat = new THREE.ShaderMaterial({
       vColor = aColor;
       vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
       // Perspective sizing: pixel size = world radius * (focal / depth)
-      gl_PointSize = aSize * (600.0 / max(1.0, -mvPos.z));
-      gl_PointSize = clamp(gl_PointSize, 8.0, 420.0);
+      gl_PointSize = aSize * (380.0 / max(1.0, -mvPos.z));
+      gl_PointSize = clamp(gl_PointSize, 4.0, 220.0);
       gl_Position = projectionMatrix * mvPos;
     }`,
   fragmentShader: `
