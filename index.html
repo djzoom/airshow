@@ -213,9 +213,13 @@ canvas{display:block;touch-action:none}
 #viewport{position:relative;background:var(--bg-mute)}
 #viewport canvas{position:absolute;inset:0;width:100%;height:100%}
 
-/* ---------------- Camera bar ---------------- */
+/* ---------------- Camera bar ----------------
+   Moved to a second row below the floatBar (which lives at top:14, height
+   48). Earlier the camMenu sat at top:14 and was hidden behind the floatBar
+   z:50 — the SHOW / PHOTOG / HELI buttons were invisible. Now both rows
+   live in their own band so every button is reachable. */
 #camMenu{
-  position:absolute;top:14px;left:70px;right:14px;
+  position:absolute;top:74px;left:14px;right:14px;
   display:flex;gap:6px;z-index:10;
   overflow-x:auto;overflow-y:hidden;white-space:nowrap;scrollbar-width:none;
 }
@@ -230,8 +234,6 @@ canvas{display:block;touch-action:none}
 }
 #camMenu button:hover{background:#fff;color:var(--accent)}
 #camMenu button.active{background:var(--accent);border-color:var(--accent);color:#fff}
-#camMenu button#dnToggle{font-size:14px;padding:8px 10px}
-#camMenu button#dnToggle.night{background:#23304a;border-color:#23304a;color:#fce8a8}
 
 /* Cinematic cut flash — 280ms total: 0→1 in 90ms, hold, 1→0 in 190ms */
 #camFade{
@@ -409,7 +411,9 @@ body.drawer-open #drawer-scrim{opacity:1;pointer-events:auto}
   background:rgba(255,255,255,.94);backdrop-filter:blur(8px);
   border:1px solid rgba(0,0,0,.08);border-radius:12px;
   height:48px;box-shadow:var(--shadow-md);overflow:hidden;
-  max-width:calc(100vw - 90px);
+  /* Leave room on the right for #legend (≈220 px) so the two top-row
+     islands never collide on wide viewports. */
+  max-width:calc(100vw - 90px - 240px);
 }
 #floatPlay{
   background:var(--accent);border:none;color:#fff;
@@ -438,15 +442,17 @@ body.drawer-open #drawer-scrim{opacity:1;pointer-events:auto}
 
 /* Mobile-only tweaks to camera bar / status / comms etc. */
 @media (max-width:900px){
+  /* camMenu stays on its second row but hugs the safe-area top inset
+     plus the floatBar height (42 mobile + 14 + breathing room). */
   #camMenu{
-    flex-direction:row;left:64px;right:14px;top:calc(14px + env(safe-area-inset-top));gap:6px;
+    flex-direction:row;left:14px;right:14px;
+    top:calc(64px + env(safe-area-inset-top));gap:6px;
     overflow-x:auto;overflow-y:hidden;white-space:nowrap;scrollbar-width:none;
   }
   #camMenu::-webkit-scrollbar{display:none}
   #camMenu button{padding:8px 12px;font-size:12px;flex:0 0 auto}
-  #statusBar{top:calc(64px + env(safe-area-inset-top));padding:8px 14px}
-  #statusBar .stage{font-size:13px}
-  #statusBar .next{font-size:10px}
+  /* Legend drops to bottom-right above the comms / timeline so it can't
+     collide with the camMenu row at the top on narrow viewports. */
   #legend{top:auto;bottom:96px;right:14px;font-size:10px;padding:8px 12px}
   #comms{bottom:96px;width:96vw;max-width:96vw;padding:10px 14px}
   .comms-grid{grid-template-columns:repeat(2,1fr) !important;gap:10px}
@@ -1328,6 +1334,14 @@ const TARGET_RUNWAY_LEN = 1600;
 // Updated once the airport.glb loads — used by reset to put plane wheels
 // just above the actual GLB runway slab (whose top isn't necessarily y=0).
 let RUNWAY_TOP_Y = 0;
+// Detected runway-strip world-space centre X and Z extents. The airport
+// model is centred on origin by bbox, but the runway is rarely at the
+// model's geometric centre — usually it's offset to one side of the
+// apron / hangars. Without these, planes spawn on the apron and land
+// across the grass next to the runway.
+let RUNWAY_CTR_X = 0;
+let RUNWAY_NEAR_Z = 700;     // takeoff start (high +Z end of the strip)
+let RUNWAY_FAR_Z  = -700;    // far threshold (used as landing aim point)
 const airportGroup = new THREE.Group();
 scene.add(airportGroup);
 
@@ -1512,23 +1526,48 @@ function loadAirportFromVenue(venue) {
         mat.needsUpdate = true;
       }
     });
-    // Detect runway slab top: pick the mesh with the longest Z extent
-    // that is at most a meter or two thick (the actual tarmac strip),
-    // and remember its world-space top so planes never spawn through it.
+    // Detect runway slab: thin (low Y), long (>400 m), and crucially
+    // *narrow* — real runways are ≈50 m wide × 1500 m long (≥10:1 aspect).
+    // The previous criterion `sz.z > 200` matched the broad apron mesh
+    // first because the apron is also wide on Z, leaving spawned planes
+    // sitting next to the actual strip. Score each candidate by length ×
+    // aspect ratio and pick the winner.
     m.updateMatrixWorld(true);
     const runwayBox = new THREE.Box3();
+    let bestScore = 0;
     let bestZSpan = 0;
     m.traverse(c => {
       if (!c.isMesh) return;
       const b = new THREE.Box3().setFromObject(c);
       const sz = b.getSize(new THREE.Vector3());
-      if (sz.z > 200 && sz.y < 12 && sz.z > bestZSpan) {
+      if (sz.y > 12) return;
+      const length = Math.max(sz.x, sz.z);
+      const width  = Math.max(0.1, Math.min(sz.x, sz.z));
+      if (length < 400) return;
+      const aspect = length / width;
+      if (aspect < 5) return;          // squarish slab → apron, skip
+      const score = length * aspect;
+      if (score > bestScore) {
+        bestScore = score;
         bestZSpan = sz.z;
         runwayBox.copy(b);
       }
     });
     RUNWAY_TOP_Y = bestZSpan > 0 ? runwayBox.max.y + 0.5 : 0.5;
-    console.log('[airport] runway top y =', RUNWAY_TOP_Y.toFixed(2), 'span', bestZSpan.toFixed(0));
+    if (bestZSpan > 0) {
+      // Capture the runway centerline so resetSim spawns on the strip and
+      // BREAK_LANDING aims for the same line.
+      RUNWAY_CTR_X  = (runwayBox.min.x + runwayBox.max.x) / 2;
+      // Spawn at the +Z end (we initially face -Z so we roll toward the far
+      // threshold). Leave ~50 m clearance from the very end so the gear is
+      // never beyond the threshold paint.
+      RUNWAY_NEAR_Z = runwayBox.max.z - 50;
+      RUNWAY_FAR_Z  = runwayBox.min.z + 50;
+    }
+    console.log('[airport] runway top y =', RUNWAY_TOP_Y.toFixed(2),
+                'span', bestZSpan.toFixed(0),
+                'ctr X', RUNWAY_CTR_X.toFixed(1),
+                'Z', RUNWAY_NEAR_Z.toFixed(0), '→', RUNWAY_FAR_Z.toFixed(0));
     airportGroup.add(m);
     // Re-seat the formation now that we know the actual slab height. The
     // first resetSim() ran with RUNWAY_TOP_Y = 0 (still loading), so the
@@ -2219,12 +2258,15 @@ function resetSim() {
   sim.mirrorPhase = 0;
   sim.landingPhase = 0;
   sim.gearForce = false;
+  sim._landingEntry = null;
 
   // Wheels sit on the actual GLB runway top + some clearance for the
   // airframe's bbox-center-to-belly distance (~3 units for these scales).
+  // X / Z are the detected runway centreline so the formation lines up
+  // with the strip instead of parking on the apron.
   const groundY = (RUNWAY_TOP_Y || 0) + 3;
-  leaderState.pos.set(0, groundY, 700);
-  leaderState.quat.identity();   // forward = -Z
+  leaderState.pos.set(RUNWAY_CTR_X, groundY, RUNWAY_NEAR_Z);
+  leaderState.quat.identity();   // forward = -Z, aimed at RUNWAY_FAR_Z
   leaderState.speed = 0;
   leaderState._rotateT = -1;
   leaderState.bankBias = 0;
@@ -2430,64 +2472,90 @@ function MOD_HIGH_PASS(mod, mt, dur, dt) {
   moveLeaderForward(dt, plan.speed.cruise);
 }
 
-// Four-phase landing: pattern descent → 3° final approach → flare → rollout.
-// Each phase has its own attitude and speed schedule; horizontal motion is
-// computed from a Y-zeroed leaderForward so the body's pitch doesn't fight
-// the explicit altitude target. Gear stays down throughout (sim.gearForce).
+// Four-phase landing aimed at the detected runway centerline.
+//   Phase 1 (0–30 %)  — repositioning: smooth lerp from wherever the
+//                       previous module left us to the start-of-final
+//                       point (centred over the runway, 4 km out, 220 m).
+//   Phase 2 (30–85 %) — 3° glide straight down the centerline to 12 m.
+//   Phase 3 (85–94 %) — flare: pitch up, sink rate decays.
+//   Phase 4 (94–100%) — rollout on the centerline, brakes to taxi speed.
 function MOD_BREAK_LANDING(mod, mt, dur, dt) {
   const t = mt / dur;
   const groundY = (RUNWAY_TOP_Y || 0) + 3;
   sim.gearForce = true;
 
-  // All horizontal motion uses a flat forward vector — the body's pitch
-  // is purely cosmetic during landing, the trajectory is set by altitude
-  // schedule + glide-slope sink rate.
-  const fwdH = leaderForward(); fwdH.y = 0;
-  if (fwdH.lengthSq() > 1e-6) fwdH.normalize();
+  // Capture entry pose on the first frame so phase 1 has a fixed source.
+  if (!sim._landingEntry) {
+    sim._landingEntry = {
+      x: leaderState.pos.x, y: leaderState.pos.y, z: leaderState.pos.z,
+    };
+  }
+  const entry = sim._landingEntry;
 
-  if (t < 0.45) {
-    // Phase 1 — pattern descent. Cruise alt → 220 m, slight nose-down.
-    const tt = t / 0.45;
-    const altGoal = plan.alt.cruise + (220 - plan.alt.cruise) * easeInOut(tt);
-    leaderState.pos.y += (altGoal - leaderState.pos.y) * 1.2 * dt;
-    alignLeaderTo(climbQuat(-0.04), 2, dt);
-    const sp = plan.speed.cruise + (plan.speed.cruise * 0.7 - plan.speed.cruise) * easeInOut(tt);
-    leaderState.speed = approach(leaderState.speed, sp, 6, dt);
-    leaderState.pos.addScaledVector(fwdH, leaderState.speed * dt);
+  // Final-approach geometry. We come in from +Z (NEAR end is +Z because
+  // identity quaternion = facing -Z) so the approach point sits 4 km past
+  // RUNWAY_NEAR_Z, and we glide all the way to the threshold.
+  const APPROACH_OUT  = 4000;
+  const APPROACH_ALT  = 220;
+  const TOUCHDOWN_X   = RUNWAY_CTR_X;
+  const TOUCHDOWN_Z   = RUNWAY_NEAR_Z;            // touchdown zone
+  const APPROACH_X    = RUNWAY_CTR_X;
+  const APPROACH_Z    = RUNWAY_NEAR_Z + APPROACH_OUT;
+  const ROLLOUT_END_Z = RUNWAY_FAR_Z + 60;        // stop short of opposite end
+
+  if (t < 0.30) {
+    // Phase 1 — fly to the approach gate (smoothly).
+    const tt = easeInOut(t / 0.30);
+    leaderState.pos.x = entry.x + (APPROACH_X   - entry.x) * tt;
+    leaderState.pos.y = entry.y + (APPROACH_ALT - entry.y) * tt;
+    leaderState.pos.z = entry.z + (APPROACH_Z   - entry.z) * tt;
+    // Aim heading at -Z (runway-aligned). bankBias stays 0; we just
+    // rotate toward the runway-aligned level attitude smoothly.
+    leaderState.quat.slerp(
+      _q.setFromEuler(new THREE.Euler(-0.03, 0, 0, 'YXZ')).clone(),
+      1 - Math.exp(-dt / 0.8)
+    );
+    leaderState.speed = approach(leaderState.speed, plan.speed.cruise * 0.7, 6, dt);
   }
   else if (t < 0.85) {
-    // Phase 2 — final approach. 3° glide slope from 220 m to ~12 m AGL,
-    // speed bleeds to Vref ~70 m/s. Body pitched -3° (typical for jets
-    // with low AOA on approach — visually matches the descent path).
-    const tt = (t - 0.45) / 0.40;
-    const altGoal = 220 + (12 - 220) * easeInOut(tt);
-    leaderState.pos.y += (altGoal - leaderState.pos.y) * 1.6 * dt;
+    // Phase 2 — 3° glide down the centerline. Linear lerp on the line
+    // from approach gate to threshold; the slope plus speed schedule
+    // produces a proper geometric descent.
+    const tt = easeInOut((t - 0.30) / 0.55);
+    leaderState.pos.x = APPROACH_X;
+    leaderState.pos.y = APPROACH_ALT + (12         - APPROACH_ALT) * tt;
+    leaderState.pos.z = APPROACH_Z   + (TOUCHDOWN_Z - APPROACH_Z)  * tt;
     if (leaderState.pos.y < groundY + 3) leaderState.pos.y = groundY + 3;
     alignLeaderTo(climbQuat(-0.05), 2.5, dt);
-    const sp = plan.speed.cruise * 0.7 + (70 - plan.speed.cruise * 0.7) * easeInOut(tt);
+    const sp = plan.speed.cruise * 0.7 + (70 - plan.speed.cruise * 0.7) * tt;
     leaderState.speed = approach(leaderState.speed, sp, 5, dt);
-    leaderState.pos.addScaledVector(fwdH, leaderState.speed * dt);
   }
   else if (t < 0.94) {
-    // Phase 3 — flare. Pitch up from -3° to +6°; sink rate decays from
-    // glide-path value (~3.6 m/s) to ~0.5 m/s at touchdown. Speed eases
-    // toward 55 m/s.
+    // Phase 3 — flare. Pitch up; sink rate decays toward touchdown.
     const tt = (t - 0.85) / 0.09;
     const targetPitch = -0.05 + (0.10 - (-0.05)) * easeInOut(tt);
     alignLeaderTo(climbQuat(targetPitch), 4, dt);
     const sinkStart = 70 * Math.sin(3 * Math.PI / 180);
     const sinkRate  = sinkStart * (1 - easeInOut(tt)) + 0.5 * easeInOut(tt);
     leaderState.pos.y = Math.max(groundY, leaderState.pos.y - sinkRate * dt);
+    leaderState.pos.x += (TOUCHDOWN_X - leaderState.pos.x) * Math.min(1, 2 * dt);
     leaderState.speed = approach(leaderState.speed, 55, 4, dt);
+    const fwdH = leaderForward(); fwdH.y = 0;
+    if (fwdH.lengthSq() > 1e-6) fwdH.normalize();
     leaderState.pos.addScaledVector(fwdH, leaderState.speed * dt);
   }
   else {
-    // Phase 4 — rollout. Wheels glued. Wings firmly level, brakes on,
-    // decelerate to taxi (~18 m/s).
+    // Phase 4 — rollout. Wheels glued, X locked to centerline, brake.
     leaderState.pos.y = groundY;
+    leaderState.pos.x += (TOUCHDOWN_X - leaderState.pos.x) * Math.min(1, 3 * dt);
     alignLeaderTo(levelQuat(), 4, dt);
     leaderState.speed = approach(leaderState.speed, 18, 18, dt);
-    leaderState.pos.addScaledVector(fwdH, leaderState.speed * dt);
+    // Cap so we don't taxi past the opposite threshold.
+    if (leaderState.pos.z > ROLLOUT_END_Z) {
+      const fwdH = leaderForward(); fwdH.y = 0;
+      if (fwdH.lengthSq() > 1e-6) fwdH.normalize();
+      leaderState.pos.addScaledVector(fwdH, leaderState.speed * dt);
+    }
   }
   sim.formationFrom = sim.formationTo = 'TRAIL';
   sim.formationT = 1;
@@ -3454,17 +3522,24 @@ bindTrailSliders();
   }));
 })();
 
-document.getElementById('play').addEventListener('click', () => { sim.playing = true; });
-document.getElementById('pause').addEventListener('click', () => { sim.playing = false; });
-document.getElementById('restart').addEventListener('click', () => { rebuildAndReset(); sim.playing = true; });
-// Floating mini-transport on the viewport (visible even when the drawer
-// planner is closed). Click toggles play/pause; the timer mirrors the
-// detailed time readout.
-document.getElementById('floatPlay').addEventListener('click', e => {
+// Single source of truth for the play/pause icon. Called by every
+// place that flips sim.playing (planner buttons, floatPlay, Space key,
+// rebuildAndReset) so the floating button never shows a stale glyph.
+function syncPlayUI() {
+  const fp = document.getElementById('floatPlay');
+  if (!fp) return;
+  fp.classList.toggle('playing', sim.playing);
+  fp.textContent = sim.playing ? '⏸' : '▶';
+}
+document.getElementById('play').addEventListener('click', () => { sim.playing = true; syncPlayUI(); });
+document.getElementById('pause').addEventListener('click', () => { sim.playing = false; syncPlayUI(); });
+document.getElementById('restart').addEventListener('click', () => { rebuildAndReset(); sim.playing = true; syncPlayUI(); });
+document.getElementById('floatPlay').addEventListener('click', () => {
   sim.playing = !sim.playing;
-  e.currentTarget.classList.toggle('playing', sim.playing);
-  e.currentTarget.textContent = sim.playing ? '⏸' : '▶';
+  syncPlayUI();
 });
+// Floating comms shortcut — opens the same DCS-style call menu that ` does.
+document.getElementById('floatComms').addEventListener('click', () => toggleComms());
 document.getElementById('smokeToggle').addEventListener('click', e => {
   TRAIL_PARAMS.enabled = !TRAIL_PARAMS.enabled;
   e.currentTarget.classList.toggle('on', TRAIL_PARAMS.enabled);
@@ -3484,7 +3559,7 @@ document.getElementById('trailPersist').addEventListener('click', e => {
 // Spacebar = play/pause toggle, common in flight sims.
 addEventListener('keydown', e => {
   if (/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return;
-  if (e.code === 'Space') { e.preventDefault(); sim.playing = !sim.playing; return; }
+  if (e.code === 'Space') { e.preventDefault(); sim.playing = !sim.playing; syncPlayUI(); return; }
   if (e.code === 'Backquote' || e.code === 'Slash') { e.preventDefault(); toggleComms(); return; }
   if (commsOpen && commsKeyMap[e.code]) {
     e.preventDefault();
